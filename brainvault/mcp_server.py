@@ -64,9 +64,7 @@ def get_my_context() -> str:
                         stale_flag = f" ⚠️ idle {days_idle}d"
                 except ValueError:
                     pass
-            lines.append(
-                f"- **{p['name']}**{stale_flag} — {p['description']} (stack: {stack_str})"
-            )
+            lines.append(f"- **{p['name']}**{stale_flag} — {p['description']} (stack: {stack_str})")
             if p["notes"]:
                 lines.append(f"  Notes: {p['notes']}")
         lines.append("")
