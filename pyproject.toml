@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "brainvault"
+version = "0.1.0"
+description = "Personal memory layer for Claude Code — knows who you are, what you've built, how you think"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["claude", "mcp", "memory", "ai", "claude-code"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "mcp>=1.0.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/sumithsb/brainvault"
+Repository = "https://github.com/sumithsb/brainvault"
+"Bug Tracker" = "https://github.com/sumithsb/brainvault/issues"
+Changelog = "https://github.com/sumithsb/brainvault/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+brainvault = "brainvault.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["brainvault"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]
