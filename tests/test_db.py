@@ -149,3 +149,75 @@ def test_get_project_memories():
     memories = db.get_project_memories("pluto")
     assert len(memories) == 2
     assert all(m["project"] == "pluto" for m in memories)
+
+
+# ---------------------------------------------------------------------------
+# VALID_MEMORY_TYPES constant
+# ---------------------------------------------------------------------------
+
+
+def test_valid_memory_types_contains_expected_values():
+    assert "profile" in db.VALID_MEMORY_TYPES
+    assert "decision" in db.VALID_MEMORY_TYPES
+    assert "pattern" in db.VALID_MEMORY_TYPES
+    assert "note" in db.VALID_MEMORY_TYPES
+    assert "project" in db.VALID_MEMORY_TYPES
+
+
+def test_valid_memory_types_matches_db_constraint():
+    # Every type in VALID_MEMORY_TYPES must be accepted by the DB CHECK constraint
+    for t in db.VALID_MEMORY_TYPES:
+        mid = db.save_memory("test", t)
+        assert mid  # no IntegrityError raised
+
+
+def test_invalid_memory_type_raises():
+    import sqlite3
+
+    import pytest
+
+    with pytest.raises(sqlite3.IntegrityError):
+        db.save_memory("bad type", "bogus_type")
+
+
+# ---------------------------------------------------------------------------
+# FTS5 fallback to LIKE search
+# ---------------------------------------------------------------------------
+
+
+def test_fts5_fallback_to_like_on_operational_error(monkeypatch):
+    """When FTS5 raises OperationalError, _search_fts must fall back to LIKE."""
+    import sqlite3
+
+    db.save_memory("JWT auth for stateless API", "decision", project="proj")
+
+    class _FakeConn:
+        """Wraps a real connection but raises OperationalError on MATCH queries."""
+
+        def __init__(self, real_conn):
+            self._real = real_conn
+
+        def execute(self, sql, params=()):
+            if "MATCH" in sql:
+                raise sqlite3.OperationalError("fts5: simulated failure")
+            return self._real.execute(sql, params)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    from contextlib import contextmanager
+
+    import brainvault.db as db_module
+
+    original_get_connection = db_module.get_connection
+
+    @contextmanager
+    def patched_get_connection():
+        with original_get_connection() as real_conn:
+            yield _FakeConn(real_conn)
+
+    monkeypatch.setattr(db_module, "get_connection", patched_get_connection)
+
+    results = db_module._search_fts("JWT", project=None, limit=5)
+    assert len(results) >= 1
+    assert any("JWT" in r["content"] for r in results)

@@ -47,6 +47,22 @@ def test_extract_project_name_camelcase():
     assert extract_project_name(path) == "InterviewAI"
 
 
+def test_extract_project_name_short_path_does_not_crash():
+    # Directories with fewer than 5 dash-separated segments must not raise
+    path = Path("/some/short/dir/session.jsonl")
+    result = extract_project_name(path)
+    assert isinstance(result, str)
+    assert len(result) > 0  # non-empty fallback
+
+
+def test_extract_project_name_empty_dir_name():
+    # Edge case: directory name is just dashes
+    path = Path("---/session.jsonl")
+    result = extract_project_name(path)
+    assert isinstance(result, str)
+    assert result  # must not be empty string
+
+
 # --- chunk_summary ---
 
 

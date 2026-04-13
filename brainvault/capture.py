@@ -62,8 +62,11 @@ def extract_project_name(session_path: Path) -> str:
     parts = dir_name.split("-")
     # parts[0] = '' (leading '-'), parts[1] = 'Users', parts[2] = username,
     # parts[3] = parent category — skip all four
+    if len(parts) < 5:
+        # Unexpected path structure — use directory name as fallback
+        return dir_name.lstrip("-") or "unknown"
     name_parts = parts[4:]
-    return "-".join(name_parts) if name_parts else "unknown"
+    return "-".join(name_parts)
 
 
 def chunk_summary(summary: str) -> list[str]:

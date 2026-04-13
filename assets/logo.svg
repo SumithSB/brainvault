@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1f2e"/>
+      <stop offset="100%" style="stop-color:#0d1117"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#58a6ff"/>
+      <stop offset="100%" style="stop-color:#a371f7"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="60" cy="60" r="58" fill="url(#bg)" stroke="#30363d" stroke-width="1.5"/>
+
+  <!-- Brain shape — two lobes -->
+  <!-- Left lobe -->
+  <path d="M60 38
+    C60 38 50 36 44 40
+    C38 44 36 50 37 56
+    C36 58 34 61 35 65
+    C36 69 40 71 43 70
+    C44 73 46 76 50 77
+    C54 78 58 76 60 74"
+    fill="none" stroke="url(#glow)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Right lobe -->
+  <path d="M60 38
+    C60 38 70 36 76 40
+    C82 44 84 50 83 56
+    C84 58 86 61 85 65
+    C84 69 80 71 77 70
+    C76 73 74 76 70 77
+    C66 78 62 76 60 74"
+    fill="none" stroke="url(#glow)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Brain stem -->
+  <line x1="60" y1="74" x2="60" y2="80" stroke="url(#glow)" stroke-width="2.2" stroke-linecap="round"/>
+
+  <!-- Brain sulci — left -->
+  <path d="M46 48 C47 52 45 57 47 61" fill="none" stroke="url(#glow)" stroke-width="1.3" stroke-linecap="round" opacity="0.7"/>
+  <path d="M41 56 C44 58 44 62 43 65" fill="none" stroke="url(#glow)" stroke-width="1.3" stroke-linecap="round" opacity="0.7"/>
+
+  <!-- Brain sulci — right -->
+  <path d="M74 48 C73 52 75 57 73 61" fill="none" stroke="url(#glow)" stroke-width="1.3" stroke-linecap="round" opacity="0.7"/>
+  <path d="M79 56 C76 58 76 62 77 65" fill="none" stroke="url(#glow)" stroke-width="1.3" stroke-linecap="round" opacity="0.7"/>
+
+  <!-- Center divide -->
+  <line x1="60" y1="38" x2="60" y2="74" stroke="url(#glow)" stroke-width="1" stroke-linecap="round" opacity="0.4" stroke-dasharray="2,3"/>
+
+  <!-- Memory nodes — small glowing dots -->
+  <circle cx="49" cy="54" r="2.5" fill="#58a6ff" opacity="0.9"/>
+  <circle cx="55" cy="64" r="2"   fill="#a371f7" opacity="0.9"/>
+  <circle cx="71" cy="54" r="2.5" fill="#58a6ff" opacity="0.9"/>
+  <circle cx="65" cy="64" r="2"   fill="#a371f7" opacity="0.9"/>
+  <circle cx="60" cy="50" r="2"   fill="#3fb950" opacity="0.9"/>
+
+  <!-- Connection lines between nodes -->
+  <line x1="49" y1="54" x2="55" y2="64" stroke="#58a6ff" stroke-width="0.8" opacity="0.5"/>
+  <line x1="71" y1="54" x2="65" y2="64" stroke="#58a6ff" stroke-width="0.8" opacity="0.5"/>
+  <line x1="49" y1="54" x2="60" y2="50" stroke="#3fb950" stroke-width="0.8" opacity="0.5"/>
+  <line x1="71" y1="54" x2="60" y2="50" stroke="#3fb950" stroke-width="0.8" opacity="0.5"/>
+  <line x1="55" y1="64" x2="65" y2="64" stroke="#a371f7" stroke-width="0.8" opacity="0.5"/>
+
+  <!-- Vault keyhole at bottom -->
+  <circle cx="60" cy="92" r="7" fill="none" stroke="url(#glow)" stroke-width="1.8"/>
+  <rect x="57.5" y="92" width="5" height="6" rx="1" fill="url(#glow)" opacity="0.8"/>
+  <circle cx="60" cy="92" r="2.5" fill="url(#glow)" opacity="0.9"/>
+</svg>

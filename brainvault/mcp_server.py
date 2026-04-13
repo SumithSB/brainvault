@@ -48,7 +48,7 @@ def get_my_context() -> str:
     if projects:
         import datetime
 
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
         lines.append("## Active Projects")
         for p in projects:
             stack = json.loads(p["stack"]) if isinstance(p["stack"], str) else p["stack"]
@@ -104,7 +104,15 @@ def search_memory(query: str, project: str = None) -> str:
     for i, m in enumerate(results, 1):
         proj_label = m["project"] or "global"
         keywords = json.loads(m["keywords"]) if isinstance(m["keywords"], str) else m["keywords"]
-        lines.append(f"[{i}] {m['memory_type']} · project: {proj_label}")
+        fts_hit = m.pop("_fts_rank", None) is not None
+        vec_hit = m.pop("_vec_rank", None) is not None
+        if vec_hit and fts_hit:
+            tag = " [hybrid]"
+        elif vec_hit:
+            tag = " [semantic]"
+        else:
+            tag = ""
+        lines.append(f"[{i}] {m['memory_type']} · project: {proj_label}{tag}")
         lines.append(f"    {m['content']}")
         if keywords:
             lines.append(f"    Keywords: {', '.join(keywords[:6])}")
@@ -137,11 +145,8 @@ def save_memory(
         keywords: Optional list of keywords. Auto-extracted if not provided.
     """
     db.init_db()
-    valid_types = {"profile", "project", "decision", "pattern", "note"}
-    if memory_type not in valid_types:
-        return (
-            f"Invalid memory_type '{memory_type}'. Must be one of: {', '.join(sorted(valid_types))}"
-        )
+    if memory_type not in db.VALID_MEMORY_TYPES:
+        return f"Invalid memory_type '{memory_type}'. Must be one of: {', '.join(sorted(db.VALID_MEMORY_TYPES))}"
 
     memory_id = db.save_memory(
         content=content,
@@ -226,7 +231,7 @@ def get_project(name: str) -> str:
 
 
 @mcp.tool()
-def record_outcome(memory_id: str, outcome: str) -> str:
+def record_outcome(memory_id: str, outcome: str, sentiment: str = None) -> str:
     """
     Record the real-world outcome of a past decision.
 
@@ -242,14 +247,19 @@ def record_outcome(memory_id: str, outcome: str) -> str:
         memory_id: UUID of the decision memory (from search results or save confirmations)
         outcome: What actually happened — be specific (e.g. 'JWT worked well at scale,
                  no issues after 6 months' or 'caused auth bugs on mobile, switched to sessions')
+        sentiment: One of 'positive', 'negative', 'mixed' — overall verdict on how the decision played out
     """
     db.init_db()
     if not outcome.strip():
         return "Outcome cannot be empty."
-    updated = db.record_outcome(memory_id, outcome)
+    updated = db.record_outcome(memory_id, outcome, sentiment=sentiment)
     if updated:
-        return f"Outcome recorded for decision {memory_id}."
-    return f"Decision {memory_id} not found. Only 'decision' type memories can have outcomes."
+        sentiment_note = f" (sentiment: {sentiment})" if sentiment else ""
+        return f"Outcome recorded for decision {memory_id}{sentiment_note}."
+    return (
+        f"Memory {memory_id} not found or is not type 'decision'. "
+        "Use search_memory to find the correct ID."
+    )
 
 
 @mcp.tool()
@@ -315,10 +325,135 @@ def reflect() -> str:
             lines.append(f"  Accessed {m['access_count']} times")
         lines.append("")
 
-    if not any([open_decisions, patterns, stale, hot]):
+    sentiment = data.get("outcome_sentiment_summary", {})
+    if sentiment:
+        total_outcomes = sum(sentiment.values())
+        lines.append("## Decision Outcomes")
+        lines.append(f"{total_outcomes} decisions have recorded outcomes:\n")
+        for label in ("positive", "negative", "mixed", "unrated"):
+            count = sentiment.get(label, 0)
+            if count:
+                bar = "█" * min(count, 20)
+                lines.append(f"  {label:<10} {bar} {count}")
+        lines.append("")
+
+    if not any([open_decisions, patterns, stale, hot, sentiment]):
         lines.append("Not enough data yet for meaningful reflection. Keep building memories.")
 
     return "\n".join(lines)
+
+
+@mcp.tool()
+def get_code_context(
+    project: str,
+    query: str,
+    include_files: bool = True,
+) -> str:
+    """
+    Get targeted code context before starting feature work on a project.
+
+    Call this INSTEAD OF reading many files when:
+    - Starting a non-trivial feature (auth, DB migrations, API design, deployment)
+    - About to touch a module not seen in this session
+    - User asks "where should I add X?" or "what files touch Y?"
+    - Making a change that likely spans 2+ files
+
+    Skip for: single-file edits you already know, cosmetic changes.
+
+    Args:
+        project:       Project name (must match a registered project).
+        query:         What you're about to work on: "add JWT refresh token" beats "auth".
+        include_files: Include ranked file list with co-change data (default True).
+                       Set False to get only relevant memories.
+
+    Returns structured context:
+    - Relevant past decisions and patterns
+    - Ranked files to read, with reason and co-change partners
+    - "Also edit" hints from co-change data — files that historically change together
+    """
+    db.init_db()
+    if not project.strip():
+        return "Error: project name cannot be empty."
+    if not query.strip():
+        return "Error: query cannot be empty."
+
+    data = db.get_code_context_data(project=project, query=query, limit=5)
+    lines = [f"# Code Context: {project} — {query}\n"]
+
+    memories = data.get("memories", [])
+    if memories:
+        lines.append("## Relevant Decisions & Patterns\n")
+        for m in memories:
+            tag = " [git]" if m.get("source") == "git" else ""
+            content = m["content"][:200] + ("…" if len(m["content"]) > 200 else "")
+            lines.append(f"- [{m['memory_type']}{tag}] {content}")
+        lines.append("")
+    else:
+        lines.append("## Relevant Decisions & Patterns\nNone found for this query.\n")
+
+    if include_files:
+        ranked = data.get("ranked_files", [])
+        if ranked:
+            lines.append("## Files to Read (ranked by relevance)\n")
+            for i, f in enumerate(ranked, 1):
+                lines.append(f"{i}. `{f['file_path']}` ({f['language']})")
+                lines.append(f"   Why: {f['reason']}")
+                if f.get("cochange_partners"):
+                    partners = ", ".join(f"`{p}`" for p in f["cochange_partners"])
+                    lines.append(f"   Also edit: {partners}")
+                lines.append("")
+        else:
+            if not db.is_repo_indexed(db.get_project_repo_path(project) or ""):
+                lines.append(
+                    "## Files to Read\n"
+                    f"No structural index found. Run: `brainvault index-repo <path> --project {project}`\n"
+                )
+            else:
+                lines.append("## Files to Read\nNo matching files for this query.\n")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def update_memory(
+    memory_id: str,
+    content: str = None,
+    memory_type: str = None,
+    project: str = None,
+) -> str:
+    """
+    Edit an existing memory in place.
+
+    Call this when:
+    - A memory is no longer accurate and needs correction
+    - User says 'update that memory', 'that's changed', 'actually it's now...'
+    - A pattern or decision has evolved and the old wording is misleading
+
+    Args:
+        memory_id: UUID of the memory to update (from search results or save confirmations)
+        content: New content to replace the existing text (omit to keep unchanged)
+        memory_type: New type — one of: profile | decision | pattern | note (omit to keep unchanged)
+        project: New project scope (omit to keep unchanged)
+    """
+    db.init_db()
+    if content is None and memory_type is None and project is None:
+        return "No changes requested. Provide at least one of: content, memory_type, project."
+
+    if memory_type and memory_type not in db.VALID_MEMORY_TYPES:
+        return f"Invalid memory_type '{memory_type}'. Must be one of: {', '.join(sorted(db.VALID_MEMORY_TYPES))}"
+
+    updated = db.update_memory(
+        memory_id,
+        content=content,
+        memory_type=memory_type,
+        project=project,
+    )
+    if updated:
+        parts = [
+            f for f, v in [("content", content), ("type", memory_type), ("project", project)] if v
+        ]
+        return f"Memory {memory_id} updated ({', '.join(parts)})."
+    return f"Memory {memory_id} not found."
 
 
 @mcp.tool()
