@@ -48,7 +48,7 @@ def get_my_context() -> str:
     if projects:
         import datetime
 
-        now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
         lines.append("## Active Projects")
         for p in projects:
             stack = json.loads(p["stack"]) if isinstance(p["stack"], str) else p["stack"]

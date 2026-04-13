@@ -27,7 +27,10 @@ def test_fts5_search_returns_correct_result():
     db.save_memory("PostgreSQL for relational data", "decision", project="pluto")
     db.save_memory("Redis for caching layer", "pattern", project="ivy")
 
-    results = db.search_memories("JWT")
+    # Use hybrid=False to test FTS5 behaviour specifically.
+    # hybrid=True merges vector results (active in test env via mock_embeddings)
+    # which can surface all memories regardless of keyword match.
+    results = db.search_memories("JWT", hybrid=False)
     assert len(results) == 1
     assert "JWT" in results[0]["content"]
 
