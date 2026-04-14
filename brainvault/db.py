@@ -14,6 +14,10 @@ VALID_MEMORY_TYPES: frozenset[str] = frozenset(
     {"profile", "project", "decision", "pattern", "note"}
 )
 
+# Wait up to 30s on connect for the DB lock; retry busy handlers up to 30s per statement.
+_SQLITE_CONNECT_TIMEOUT_S = 30.0
+_SQLITE_BUSY_TIMEOUT_MS = 30000
+
 
 def get_db_path() -> Path:
     path = Path.home() / ".brainvault" / "memory.db"
@@ -23,9 +27,11 @@ def get_db_path() -> Path:
 
 @contextmanager
 def get_connection():
-    conn = sqlite3.connect(get_db_path())
+    conn = sqlite3.connect(get_db_path(), timeout=_SQLITE_CONNECT_TIMEOUT_S)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA foreign_keys=ON")
     try:
         import sqlite_vec
 
@@ -204,6 +210,22 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 cochange_pairs INTEGER NOT NULL DEFAULT 0
             )
         """)
+
+    if "session_events" not in tables:
+        conn.execute("""
+            CREATE TABLE session_events (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id   TEXT NOT NULL,
+                project      TEXT,
+                tool_name    TEXT NOT NULL,
+                input_summary TEXT NOT NULL DEFAULT '',
+                output_summary TEXT NOT NULL DEFAULT '',
+                timestamp    TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute("CREATE INDEX idx_se_session  ON session_events(session_id)")
+        conn.execute("CREATE INDEX idx_se_project   ON session_events(project)")
+        conn.execute("CREATE INDEX idx_se_timestamp ON session_events(timestamp)")
 
     # Add indexes that were missing from the initial schema.
     existing_indexes = {
@@ -618,19 +640,18 @@ def update_memory(
             return False
         current = dict(row)
 
-    new_content = content if content is not None else current["content"]
-    new_type = memory_type if memory_type is not None else current["memory_type"]
-    new_project = project if project is not None else current["project"]
-    new_keywords = json.dumps(
-        keywords
-        if keywords is not None
-        else _extract_keywords(new_content)
-        if content is not None
-        else json.loads(current["keywords"] or "[]")
-    )
+        new_content = content if content is not None else current["content"]
+        new_type = memory_type if memory_type is not None else current["memory_type"]
+        new_project = project if project is not None else current["project"]
+        new_keywords = json.dumps(
+            keywords
+            if keywords is not None
+            else _extract_keywords(new_content)
+            if content is not None
+            else json.loads(current["keywords"] or "[]")
+        )
 
-    with get_connection() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
             UPDATE memories
             SET content = ?, memory_type = ?, project = ?, keywords = ?
@@ -638,6 +659,8 @@ def update_memory(
             """,
             (new_content, new_type, new_project, new_keywords, memory_id),
         )
+        if cur.rowcount == 0:
+            return False
         if new_project:
             conn.execute(
                 "UPDATE projects SET last_active = datetime('now') WHERE name = ?",
@@ -716,6 +739,111 @@ def get_git_scan_stats(repo_path: str | None = None) -> dict:
                 "git_memories": git_memories,
                 "repos_scanned": repos_scanned,
             }
+
+
+def record_tool_event(
+    session_id: str,
+    tool_name: str,
+    input_summary: str,
+    output_summary: str = "",
+    project: str | None = None,
+) -> None:
+    """Append one PostToolUse event to the session_events ring buffer."""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO session_events (session_id, project, tool_name, input_summary, output_summary)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (session_id, project, tool_name, input_summary[:500], output_summary[:200]),
+        )
+
+
+def get_session_timeline(session_id: str) -> list[dict]:
+    """Return all events for a session in chronological order."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, session_id, project, tool_name, input_summary, output_summary, timestamp
+            FROM session_events
+            WHERE session_id = ?
+            ORDER BY id ASC
+            """,
+            (session_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_recent_activity(
+    project: str | None = None,
+    days: int = 7,
+    limit_sessions: int = 5,
+) -> dict:
+    """
+    Return a compact activity index for the most recent sessions.
+
+    Returns:
+        {
+          "sessions": [
+            {"session_id": str, "project": str|None, "event_count": int,
+             "tools": [str, ...], "last_event": str, "first_event": str}
+          ],
+          "total_events": int,
+          "period_days": int,
+        }
+    """
+    since = f"datetime('now', '-{int(days)} days')"
+    project_filter = "AND project = ?" if project else ""
+    params: list = [project] if project else []
+
+    with get_connection() as conn:
+        total_events = conn.execute(
+            f"SELECT COUNT(*) FROM session_events WHERE timestamp >= {since} {project_filter}",
+            params,
+        ).fetchone()[0]
+
+        # Get recent session IDs ordered by most recent activity
+        session_rows = conn.execute(
+            f"""
+            SELECT session_id, project, COUNT(*) as event_count,
+                   MIN(timestamp) as first_event, MAX(timestamp) as last_event
+            FROM session_events
+            WHERE timestamp >= {since} {project_filter}
+            GROUP BY session_id
+            ORDER BY last_event DESC
+            LIMIT ?
+            """,
+            params + [limit_sessions],
+        ).fetchall()
+
+        sessions = []
+        for row in session_rows:
+            # Get distinct tools used in this session
+            tool_rows = conn.execute(
+                "SELECT DISTINCT tool_name FROM session_events WHERE session_id = ? ORDER BY id",
+                (row["session_id"],),
+            ).fetchall()
+            sessions.append(
+                {
+                    "session_id": row["session_id"],
+                    "project": row["project"],
+                    "event_count": row["event_count"],
+                    "tools": [t[0] for t in tool_rows],
+                    "first_event": row["first_event"],
+                    "last_event": row["last_event"],
+                }
+            )
+
+    return {"sessions": sessions, "total_events": total_events, "period_days": days}
+
+
+def prune_old_events(days: int = 90) -> int:
+    """Delete session_events older than `days` days. Returns rows deleted."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            f"DELETE FROM session_events WHERE timestamp < datetime('now', '-{int(days)} days')"
+        )
+        return cursor.rowcount
 
 
 def get_unembedded_memories() -> list[dict]:

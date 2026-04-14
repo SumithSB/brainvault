@@ -255,39 +255,63 @@ def build_graph_data() -> dict:
                 }
             )
 
-    # Keyword overlap edges (≥2 shared keywords)
-    ids = [m["id"] for m in memories]
-    for i in range(len(ids)):
-        for j in range(i + 1, len(ids)):
-            a, b = ids[i], ids[j]
-            shared = set(keyword_map[a]) & set(keyword_map[b])
-            if len(shared) >= 2:
-                edges.append(
-                    {
-                        "source": a,
-                        "target": b,
-                        "type": "keyword_overlap",
-                        "weight": min(len(shared) / 3.0, 1.0),
-                        "shared_keywords": list(shared)[:5],
-                    }
-                )
+    # Keyword overlap edges (≥2 shared keywords) — candidate pairs via inverted index
+    kw_to_ids: dict[str, list[str]] = {}
+    for mid, kws in keyword_map.items():
+        for kw in kws:
+            kw_to_ids.setdefault(kw, []).append(mid)
+    kw_pair_seen: set[tuple[str, str]] = set()
+    for id_list in kw_to_ids.values():
+        if len(id_list) < 2:
+            continue
+        for i in range(len(id_list)):
+            for j in range(i + 1, len(id_list)):
+                a, b = id_list[i], id_list[j]
+                if a > b:
+                    a, b = b, a
+                if (a, b) in kw_pair_seen:
+                    continue
+                shared = set(keyword_map[a]) & set(keyword_map[b])
+                if len(shared) >= 2:
+                    kw_pair_seen.add((a, b))
+                    edges.append(
+                        {
+                            "source": a,
+                            "target": b,
+                            "type": "keyword_overlap",
+                            "weight": min(len(shared) / 3.0, 1.0),
+                            "shared_keywords": list(shared)[:5],
+                        }
+                    )
 
-    # File overlap edges between git commits (same file touched)
-    git_ids = list(git_file_map.keys())
-    for i in range(len(git_ids)):
-        for j in range(i + 1, len(git_ids)):
-            a, b = git_ids[i], git_ids[j]
-            shared_files = set(git_file_map[a]) & set(git_file_map[b])
-            if shared_files:
-                edges.append(
-                    {
-                        "source": a,
-                        "target": b,
-                        "type": "file_overlap",
-                        "weight": min(len(shared_files) / 3.0, 1.0),
-                        "shared_files": list(shared_files)[:4],
-                    }
-                )
+    # File overlap edges between git commits — candidate pairs via inverted index
+    file_to_git_ids: dict[str, list[str]] = {}
+    for mid, files in git_file_map.items():
+        for f in files:
+            file_to_git_ids.setdefault(f, []).append(mid)
+    file_pair_seen: set[tuple[str, str]] = set()
+    for id_list in file_to_git_ids.values():
+        if len(id_list) < 2:
+            continue
+        for i in range(len(id_list)):
+            for j in range(i + 1, len(id_list)):
+                a, b = id_list[i], id_list[j]
+                if a > b:
+                    a, b = b, a
+                if (a, b) in file_pair_seen:
+                    continue
+                shared_files = set(git_file_map[a]) & set(git_file_map[b])
+                if shared_files:
+                    file_pair_seen.add((a, b))
+                    edges.append(
+                        {
+                            "source": a,
+                            "target": b,
+                            "type": "file_overlap",
+                            "weight": min(len(shared_files) / 3.0, 1.0),
+                            "shared_files": list(shared_files)[:4],
+                        }
+                    )
 
     # Temporal edges: consecutive git commits in same project (sorted by date)
     for proj_key, git_list in git_by_project.items():
@@ -836,12 +860,12 @@ function updateDetail() {
   const color = TYPE_COLORS[n.type] || '#8b949e';
   let html = '';
 
-  // Type + source badge
+  // Type + source badge (escape dynamic text — ids/labels can contain quotes)
   html += `<div id="detail-type-badge" style="background:${color}22;color:${color};border:1px solid ${color}44">`;
-  html += `● ${n.type}`;
+  html += `● ${escHtml(n.type)}`;
   if (n.source && n.source !== 'explicit' && n.source !== 'project') {
     const sc = SOURCE_COLORS[n.source] || '#8b949e';
-    html += ` &nbsp;<span style="color:${sc};font-weight:400">via ${n.source}</span>`;
+    html += ` &nbsp;<span style="color:${sc};font-weight:400">via ${escHtml(n.source)}</span>`;
   }
   html += '</div>';
 
@@ -929,26 +953,59 @@ function updateDetail() {
 
   const totalConn = Object.values(edgeGroups).reduce((s, a) => s + a.length, 0);
   if (totalConn) {
-    html += `<div style="margin-top:12px;font-size:11px;color:#8b949e;margin-bottom:4px">Connected (${totalConn}):</div>`;
-    Object.entries(edgeGroups).forEach(([type, items]) => {
-      const label = edgeTypeLabels[type] || type;
-      html += `<div style="font-size:10px;color:#8b949e;margin:6px 0 3px">${label}</div>`;
-      items.slice(0, 5).forEach(({ id: cid, edgeData }) => {
-        const cn = DATA.nodes.find(x => x.id === cid);
-        if (!cn) return;
-        const cc = TYPE_COLORS[cn.type] || '#8b949e';
-        const snippet = ((cn.git_hash ? cn.label : cn.full_content) || cn.label).substring(0, 60);
-        const extra = type === 'keyword_overlap' && edgeData.shared_keywords
-          ? ` <span style="color:#3fb950">[${edgeData.shared_keywords.slice(0,3).join(', ')}]</span>` : '';
-        const fileExtra = type === 'file_overlap' && edgeData.shared_files
-          ? ` <span style="color:#f0883e">[${edgeData.shared_files.slice(0,2).join(', ')}]</span>` : '';
-        html += `<div class="connected-node" onclick="selectNode('${cid}')">`;
-        html += `<span style="color:${cc}">●</span> ${escHtml(snippet)}…${extra}${fileExtra}</div>`;
-      });
-    });
+    html += '<div id="bv-connected-mount"></div>';
   }
 
   panel.innerHTML = html;
+
+  // Connected nodes: build with DOM APIs so node ids never break out of HTML/JS strings
+  if (totalConn) {
+    const mount = document.getElementById('bv-connected-mount');
+    if (mount) {
+      const hdr = document.createElement('div');
+      hdr.style.cssText = 'margin-top:12px;font-size:11px;color:#8b949e;margin-bottom:4px';
+      hdr.textContent = `Connected (${totalConn}):`;
+      mount.appendChild(hdr);
+      Object.entries(edgeGroups).forEach(([type, items]) => {
+        const label = edgeTypeLabels[type] || type;
+        const sub = document.createElement('div');
+        sub.style.cssText = 'font-size:10px;color:#8b949e;margin:6px 0 3px';
+        sub.textContent = label;
+        mount.appendChild(sub);
+        items.slice(0, 5).forEach(({ id: cid, edgeData }) => {
+          const cn = DATA.nodes.find(x => x.id === cid);
+          if (!cn) return;
+          const cc = TYPE_COLORS[cn.type] || '#8b949e';
+          const raw = (cn.git_hash ? cn.label : cn.full_content) || cn.label;
+          const snippet = String(raw).substring(0, 60);
+          const row = document.createElement('div');
+          row.className = 'connected-node';
+          row.addEventListener('click', (e) => { e.stopPropagation(); selectNode(cid); });
+          const dot = document.createElement('span');
+          dot.style.color = cc;
+          dot.textContent = '●';
+          row.appendChild(dot);
+          row.appendChild(document.createTextNode(' '));
+          const txt = document.createElement('span');
+          txt.textContent = snippet + '…';
+          row.appendChild(txt);
+          if (type === 'keyword_overlap' && edgeData.shared_keywords && edgeData.shared_keywords.length) {
+            const span = document.createElement('span');
+            span.style.color = '#3fb950';
+            span.textContent = ' [' + edgeData.shared_keywords.slice(0, 3).join(', ') + ']';
+            row.appendChild(span);
+          }
+          if (type === 'file_overlap' && edgeData.shared_files && edgeData.shared_files.length) {
+            const span = document.createElement('span');
+            span.style.color = '#f0883e';
+            span.textContent = ' [' + edgeData.shared_files.slice(0, 2).join(', ') + ']';
+            row.appendChild(span);
+          }
+          mount.appendChild(row);
+        });
+      });
+    }
+  }
 }
 
 svg.on('click', () => { selectedId = null; updateFade(); updateDetail(); });
@@ -957,20 +1014,23 @@ svg.on('click', () => { selectedId = null; updateFade(); updateDetail(); });
 const tooltip = document.getElementById('tooltip');
 function showTooltip(e, d) {
   const color = TYPE_COLORS[d.type] || '#8b949e';
-  let html = `<div class="tt-type" style="color:${color}">● ${d.type}${d.project ? ' · ' + d.project : ''}`;
+  let html = `<div class="tt-type" style="color:${color}">● ${escHtml(d.type)}`;
+  if (d.project) html += ' · ' + escHtml(d.project);
   if (d.source === 'git') html += ' · <span style="color:#f0883e">git</span>';
   html += `</div>`;
   if (d.type === 'file') {
     html += `<div class="tt-content">${escHtml(d.full_path || d.label)}</div>`;
     const meta = [];
-    if (d.language && d.language !== 'unknown') meta.push(d.language);
-    if (d.cochange_score) meta.push(`${d.cochange_score} co-changes`);
+    if (d.language && d.language !== 'unknown') meta.push(escHtml(d.language));
+    if (d.cochange_score) meta.push(escHtml(String(d.cochange_score)) + ' co-changes');
     if (meta.length) html += `<div class="tt-files">${meta.join(' · ')}</div>`;
   } else if (d.git_hash) {
-    html += `<div class="tt-git">⬡ ${d.git_hash} · ${d.git_date || ''}</div>`;
+    html += `<div class="tt-git">⬡ ${escHtml(d.git_hash)} · ${escHtml(d.git_date || '')}</div>`;
     html += `<div class="tt-content">${escHtml(d.label.substring(0, 100))}</div>`;
-    if (d.git_files && d.git_files.length)
-      html += `<div class="tt-files">${d.git_files.slice(0,3).join(' · ')}</div>`;
+    if (d.git_files && d.git_files.length) {
+      const gf = d.git_files.slice(0, 3).map(f => escHtml(f)).join(' · ');
+      html += `<div class="tt-files">${gf}</div>`;
+    }
   } else {
     html += `<div class="tt-content">${escHtml((d.full_content || d.label).substring(0, 130))}${(d.full_content||d.label).length > 130 ? '…' : ''}</div>`;
   }

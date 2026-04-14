@@ -474,6 +474,87 @@ def forget(memory_id: str) -> str:
     return f"Memory {memory_id} not found."
 
 
+@mcp.tool()
+def get_recent_activity(
+    project: str = None,
+    days: int = 7,
+) -> str:
+    """
+    Return a compact index of recent Claude Code tool activity across sessions.
+
+    Surfaces what files were written/edited, what commands ran, and which sessions
+    were most active — without loading the full event stream.
+
+    Call this when:
+    - User asks "what did I work on recently?"
+    - You want context about recent changes before starting a task
+    - You need to know which sessions touched a specific project
+
+    Args:
+        project: Filter to a specific project name (omit for all projects)
+        days: How many days back to look (default: 7)
+    """
+    db.init_db()
+    data = db.get_recent_activity(project=project, days=days)
+    sessions = data.get("sessions", [])
+    total = data.get("total_events", 0)
+
+    if not sessions:
+        scope = f" for project '{project}'" if project else ""
+        return f"No activity recorded in the last {days} days{scope}."
+
+    lines = [f"# Recent Activity (last {days} days)\n"]
+    lines.append(f"Total events: {total} across {len(sessions)} session(s)\n")
+
+    for s in sessions:
+        session_id = s["session_id"]
+        proj_label = f"[{s['project']}] " if s.get("project") else ""
+        first = (s.get("first_event") or "")[:16]
+        last = (s.get("last_event") or "")[:16]
+        tools = ", ".join(s.get("tools", []))
+        lines.append(f"## {proj_label}Session `{session_id[:12]}…`")
+        lines.append(f"Period: {first} → {last}  |  {s['event_count']} events  |  Tools: {tools}")
+        lines.append(f"_For full timeline: call `get_session_timeline('{session_id}')`_\n")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_session_timeline(session_id: str) -> str:
+    """
+    Return the full ordered event timeline for a specific Claude Code session.
+
+    Shows every Write / Edit / Bash / TodoWrite / NotebookEdit call with a
+    compact summary of what was done.
+
+    Call this when:
+    - User asks "what did I do in that session?"
+    - You need to reconstruct the sequence of changes in a past session
+    - Debugging what happened during a specific working period
+
+    Args:
+        session_id: Session ID from get_recent_activity output
+    """
+    db.init_db()
+    events = db.get_session_timeline(session_id)
+
+    if not events:
+        return f"No events found for session '{session_id}'."
+
+    lines = [f"# Session Timeline: `{session_id[:12]}…`\n"]
+    lines.append(f"{len(events)} events recorded\n")
+
+    for ev in events:
+        ts = (ev.get("timestamp") or "")[:16]
+        tool = ev["tool_name"]
+        summary = ev.get("input_summary", "")
+        out = ev.get("output_summary", "")
+        out_str = f"  → {out}" if out else ""
+        lines.append(f"`{ts}` **{tool}** {summary}{out_str}")
+
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     db.init_db()
     mcp.run(transport="stdio")

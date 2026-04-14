@@ -7,7 +7,7 @@ Thanks for your interest in contributing.
 ## Development setup
 
 ```bash
-git clone https://github.com/sumithsb/brainvault
+git clone https://github.com/SumithSB/brainvault
 cd brainvault
 pip install -e ".[dev]"
 ```
@@ -42,10 +42,13 @@ CI will fail if either check fails.
 brainvault/
 ├── db.py           — SQLite schema, CRUD, FTS5 search, vector search, reflection queries
 │                     VALID_MEMORY_TYPES constant; all migrations in _migrate()
-├── mcp_server.py   — 10 MCP tools served via stdio (FastMCP)
+├── mcp_server.py   — 12 MCP tools served via stdio (FastMCP)
 ├── capture.py      — Stop hook handler; extracts continuation summaries from JSONL session files
+├── tool_capture.py — PostToolUse hook handler; records Write/Edit/Bash/TodoWrite/NotebookEdit
+│                     events into session_events table; <20 ms per event, never crashes
 ├── bootstrap.py    — Imports past Claude Code session history into the vault
-├── installer.py    — Patches ~/.claude/settings.json + CLAUDE.md; auto-seeds vault on install
+├── installer.py    — Patches ~/.claude/settings.json + CLAUDE.md; registers Stop + PostToolUse
+│                     hooks; auto-seeds vault on install
 ├── git_scan.py     — Mines git history for significant commits; discover_repos() for system scan
 ├── code_scan.py    — File tree walker, regex import extractor, co-change matrix builder
 ├── embeddings.py   — Optional fastembed wrapper (BAAI/bge-small-en-v1.5, lazy singleton)
@@ -54,16 +57,17 @@ brainvault/
 │                     when code_entities/code_cochange tables are populated by index-repo;
 │                     6 edge types: belongs_to, file_overlap, temporal, keyword_overlap,
 │                     cochange, memory_file
-└── cli.py          — CLI entry point (14 commands, manual sys.argv parsing)
+└── cli.py          — CLI entry point (16 commands, manual sys.argv parsing)
 
 tests/
 ├── conftest.py          — autouse fixtures: mock_embeddings (no model download), tmp_db (isolated DB)
 ├── test_db.py           — DB layer, FTS5 search, VALID_MEMORY_TYPES, FTS5 fallback
-├── test_mcp.py          — All 10 MCP tools
+├── test_mcp.py          — All 12 MCP tools
 ├── test_capture.py      — Session summary extraction, project name derivation
 ├── test_bootstrap.py    — Historical session importer
 ├── test_git_scan.py     — Git history miner, significance filtering, CLI dispatch
 ├── test_code_scan.py    — File tree walker, import extraction (Python/JS/TS/Go/Dart), co-change matrix
+├── test_tool_capture.py — PostToolUse hook handler, session replay DB functions
 ├── test_new_features.py — status, update, reflect, forget commands; CLAUDE.md upgrade paths
 └── test_vector.py       — Semantic search, RRF merge, embedding backfill
 ```
@@ -110,6 +114,10 @@ tests/
 5. Open a PR — describe what you changed and why
 
 ---
+
+## Security issues
+
+Do not file public issues for vulnerabilities. See [SECURITY.md](SECURITY.md).
 
 ## Reporting bugs
 

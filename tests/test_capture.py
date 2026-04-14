@@ -8,6 +8,7 @@ from pathlib import Path
 from brainvault import db
 from brainvault.capture import (
     CONTINUATION_MARKER,
+    _maybe_backfill_embeddings,
     chunk_summary,
     clean_continuation_summary,
     extract_continuation_summaries,
@@ -248,3 +249,230 @@ def test_process_session_no_summary_saves_nothing(tmp_path):
 
     saved = process_session(session_file)
     assert saved == 0
+
+
+# ---------------------------------------------------------------------------
+# _maybe_run_git_scan
+# ---------------------------------------------------------------------------
+
+
+def test_maybe_run_git_scan_skips_when_latest_commit_already_scanned(monkeypatch, tmp_path):
+    import brainvault.capture as cap
+    import brainvault.git_scan as gs
+    from brainvault import db
+
+    monkeypatch.chdir(tmp_path)
+
+    repo_key = str(tmp_path)
+    commit_hash = "abc123def456abc123def456abc123def456abc1"
+
+    monkeypatch.setattr(gs, "_resolve_repo_path", lambda p: tmp_path)
+    monkeypatch.setattr(gs, "_run_git", lambda args, cwd: commit_hash)
+    db.mark_commit_scanned(repo_key, commit_hash)
+
+    result = cap._maybe_run_git_scan()
+    assert result == 0  # already scanned, skipped
+
+
+def test_maybe_run_git_scan_runs_when_new_commits_exist(monkeypatch, tmp_path):
+    import brainvault.capture as cap
+    import brainvault.git_scan as gs
+
+    monkeypatch.chdir(tmp_path)
+
+    new_hash = "newcommithash000000000000000000000000000"
+
+    monkeypatch.setattr(gs, "_resolve_repo_path", lambda p: tmp_path)
+    monkeypatch.setattr(gs, "_run_git", lambda args, cwd: new_hash)
+
+    scan_called = {}
+
+    def fake_scan_repo(repo_path, project, since, limit, verbose):
+        scan_called["ran"] = True
+        return {
+            "commits_saved": 3,
+            "commits_examined": 5,
+            "already_scanned": 2,
+            "not_significant": 0,
+        }
+
+    monkeypatch.setattr(gs, "scan_repo", fake_scan_repo)
+
+    result = cap._maybe_run_git_scan()
+    assert scan_called.get("ran") is True
+    assert result == 3
+
+
+def test_maybe_run_git_scan_swallows_errors(monkeypatch, tmp_path):
+    import brainvault.capture as cap
+    import brainvault.git_scan as gs
+
+    monkeypatch.chdir(tmp_path)
+
+    def boom(p):
+        raise ValueError("not a git repo")
+
+    monkeypatch.setattr(gs, "_resolve_repo_path", boom)
+
+    result = cap._maybe_run_git_scan()
+    assert result == 0  # error swallowed
+
+
+# ---------------------------------------------------------------------------
+# _maybe_reindex_repo
+# ---------------------------------------------------------------------------
+
+
+def test_maybe_reindex_repo_auto_indexes_first_time(monkeypatch, tmp_path):
+    import brainvault.capture as cap
+    import brainvault.code_scan as cs
+    import brainvault.git_scan as gs
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(gs, "_resolve_repo_path", lambda p: tmp_path)
+
+    # Repo has never been indexed; file count is small
+    monkeypatch.setattr(cs, "scan_file_tree", lambda p: ([{"f": i} for i in range(10)], 0))
+
+    index_called = {}
+
+    def fake_index_repo(repo_path, project, verbose):
+        index_called["ran"] = True
+        return {}
+
+    monkeypatch.setattr(cs, "index_repo", fake_index_repo)
+
+    result = cap._maybe_reindex_repo()
+    assert index_called.get("ran") is True
+    assert result is True
+
+
+def test_maybe_reindex_repo_skips_when_never_indexed_and_too_large(monkeypatch, tmp_path):
+    import brainvault.capture as cap
+    import brainvault.code_scan as cs
+    import brainvault.git_scan as gs
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(gs, "_resolve_repo_path", lambda p: tmp_path)
+
+    # File count exceeds the auto-index limit
+    monkeypatch.setattr(cs, "scan_file_tree", lambda p: ([{"f": i} for i in range(6000)], 0))
+
+    result = cap._maybe_reindex_repo()
+    assert result is False  # too large, skip
+
+
+def test_maybe_reindex_repo_skips_when_fresh(monkeypatch, tmp_path):
+    import brainvault.capture as cap
+    import brainvault.git_scan as gs
+    from brainvault import db
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(gs, "_resolve_repo_path", lambda p: tmp_path)
+
+    with db.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO code_index_runs (repo_path, project, file_count, cochange_pairs) VALUES (?, ?, ?, ?)",
+            (str(tmp_path), "myproject", 10, 5),
+        )
+
+    result = cap._maybe_reindex_repo()
+    assert result is False  # <24h old, skip
+
+
+def test_maybe_reindex_repo_runs_when_stale(monkeypatch, tmp_path):
+    import brainvault.capture as cap
+    import brainvault.code_scan as cs
+    import brainvault.git_scan as gs
+    from brainvault import db
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(gs, "_resolve_repo_path", lambda p: tmp_path)
+
+    with db.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO code_index_runs (repo_path, project, indexed_at, file_count, cochange_pairs) "
+            "VALUES (?, ?, datetime('now', '-2 days'), ?, ?)",
+            (str(tmp_path), "myproject", 10, 5),
+        )
+
+    index_called = {}
+
+    def fake_index_repo(repo_path, project, verbose):
+        index_called["ran"] = True
+        return {"files_found": 10, "cochange_pairs": 5, "languages": {}, "parse_errors": 0}
+
+    monkeypatch.setattr(cs, "index_repo", fake_index_repo)
+
+    result = cap._maybe_reindex_repo()
+    assert index_called.get("ran") is True
+    assert result is True
+
+
+def test_maybe_reindex_repo_swallows_errors(monkeypatch, tmp_path):
+    import brainvault.capture as cap
+    import brainvault.git_scan as gs
+
+    monkeypatch.chdir(tmp_path)
+
+    def boom(p):
+        raise RuntimeError("unexpected error")
+
+    monkeypatch.setattr(gs, "_resolve_repo_path", boom)
+
+    result = cap._maybe_reindex_repo()
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# _maybe_backfill_embeddings
+# ---------------------------------------------------------------------------
+
+
+def test_maybe_backfill_embeddings_runs_when_unembedded_exist():
+    from brainvault import db
+
+    # Save a memory — mock_embeddings fixture means it IS embedded already via save_memory
+    # To get an unembedded one, delete its vector row directly
+    mid = db.save_memory("Postgres decision", "decision")
+    with db.get_connection() as conn:
+        conn.execute("DELETE FROM memory_vectors WHERE memory_id = ?", (mid,))
+
+    result = _maybe_backfill_embeddings()
+    assert result == 1
+
+    # Verify it's now embedded
+    assert db.count_embedded() == 1
+
+
+def test_maybe_backfill_embeddings_skips_when_all_embedded():
+    from brainvault import db
+
+    db.save_memory("Already embedded", "pattern")
+    # memory_vectors row was created by save_memory via _try_embed_and_store
+
+    result = _maybe_backfill_embeddings()
+    assert result == 0
+
+
+def test_maybe_backfill_embeddings_caps_at_20(monkeypatch):
+    from brainvault import db
+
+    # Create 25 unembedded memories
+    ids = [db.save_memory(f"decision {i}", "decision") for i in range(25)]
+    with db.get_connection() as conn:
+        for mid in ids:
+            conn.execute("DELETE FROM memory_vectors WHERE memory_id = ?", (mid,))
+        conn.connection.commit() if hasattr(conn, "connection") else None
+
+    result = _maybe_backfill_embeddings()
+    assert result == 20  # capped at 20 per invocation
+
+
+def test_maybe_backfill_embeddings_swallows_errors(monkeypatch):
+    import brainvault.embeddings as emb
+
+    monkeypatch.setattr(emb, "_is_available", lambda: False)
+
+    result = _maybe_backfill_embeddings()
+    assert result == 0

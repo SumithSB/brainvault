@@ -71,12 +71,16 @@ pip install brainvault
 brainvault install
 ```
 
-Restart Claude Code. That's it.
+Restart Claude Code. That's it. **Install once — every existing and future project is covered automatically.** No per-project setup. No configuration files in your repos.
+
+### Why it's global
+
+The installer patches `~/.claude/settings.json` and `~/.claude/CLAUDE.md` — Claude Code's global config, not anything project-specific. The database lives at `~/.brainvault/memory.db`, a single vault shared across all projects. Every Claude Code session you open, in any directory, benefits immediately.
 
 ### What the installer does
 
 **Step 1 — Database**
-Creates `~/.brainvault/memory.db` with the full schema (memories, projects, vector embeddings, git scan deduplication, code intelligence tables). Safe to re-run — existing data is never touched.
+Creates `~/.brainvault/memory.db` with the full schema. Safe to re-run — existing data is never touched.
 
 **Step 2 — MCP server registration**
 Adds to `~/.claude/settings.json`:
@@ -91,15 +95,17 @@ Adds to `~/.claude/settings.json`:
 Claude Code auto-starts the MCP server on launch and keeps it connected for the entire session.
 
 **Step 3 — Stop hook**
-Adds to `~/.claude/settings.json`:
-```json
-"hooks": {
-  "Stop": [{ "hooks": [{ "type": "command", "command": "python -m brainvault.capture" }] }]
-}
-```
-This fires `brainvault.capture` after every agent turn. It silently checks for Claude-generated continuation summaries and saves them to the vault.
+Fires `brainvault.capture` after every agent turn. Each invocation silently runs a maintenance pass:
+- Saves any Claude-generated continuation summaries from the session
+- Scans the current repo for new git commits and saves significant ones as memories
+- Auto-indexes the current repo's file structure if it hasn't been indexed yet (skips repos >5 000 source files)
+- Re-indexes if the existing index is >24 h stale
+- Backfills any unembedded memories (up to 20 per turn, if `[semantic]` is installed)
 
-**Step 4 — CLAUDE.md instructions**
+**Step 4 — PostToolUse hook**
+Fires `brainvault.tool_capture` after every Write / Edit / Bash / TodoWrite / NotebookEdit call. Writes a compact event row to the session replay buffer — what files were touched, what commands ran. Under 20 ms, never crashes.
+
+**Step 5 — CLAUDE.md instructions**
 Injects a managed block into `~/.claude/CLAUDE.md` that instructs Claude to:
 - Call `get_my_context()` silently at the start of every session
 - Save decisions, patterns, and profile info proactively during the session
@@ -109,7 +115,7 @@ Injects a managed block into `~/.claude/CLAUDE.md` that instructs Claude to:
 
 Re-running `install` upgrades the block in-place using start/end markers without touching your surrounding content.
 
-**Step 5 — Vault seeding (automatic)**
+**Step 6 — Vault seeding (automatic)**
 Immediately after setup, the installer:
 1. Discovers all git repos under `~/`, scans the last 12 months of history (up to 200 commits per repo), and saves significant commits as memories — so your vault has real data from the first session
 2. Walks `~/.claude/projects/` and imports all past Claude Code continuation summaries
@@ -144,24 +150,45 @@ This takes ~50ms and uses ~1–2K tokens. The cold-start problem is solved befor
 > → saved as `profile`, no project scope
 
 **You make a technical decision** → Claude saves a `decision` memory with the full reasoning.
-> "Let's use JWT here — we need to be stateless for horizontal scaling"
+> "Let's use Celery with Redis — the jobs need to survive deploys, we need per-task retry budgets, and the team already runs Redis for caching so it's one less service"
 > → saved as `decision` scoped to current project, content includes *why*
 
 **You establish a pattern** → Claude saves a `pattern` memory.
-> "Always add an integration test alongside any new API endpoint in this project"
+> "Always emit a domain event to the outbox table inside the same transaction as the state change — never publish directly to the queue"
 > → saved as `pattern`
 
 **You work on something architectural** → Claude searches before recommending.
-> You ask about caching strategy
-> → Claude calls `search_memory("caching")` first, finds what you decided for a past project, surfaces it before answering
+> You ask about how to handle webhook retries
+> → Claude calls `search_memory("webhook")` first, finds what you decided for a past project, surfaces it before answering
 
 **You explicitly ask to remember something**
-> "Remember that we decided against GraphQL because the team doesn't have experience with it"
+> "Remember that we ruled out DynamoDB — the team has no experience with key design and we got burned on hot partitions in the prototype"
 > → saved immediately, never requires a separate command
 
-### Session end
+### Session end (and every agent turn)
 
-The Stop hook fires. `brainvault.capture` scans the session JSONL file for a Claude-generated continuation summary (the structured summary Claude writes when context runs out). If found, it's chunked by markdown section and saved as `note` memories. This is the highest-quality memory source — Claude wrote it specifically to preserve context.
+The Stop hook fires `brainvault.capture` after every agent turn. It runs a silent maintenance pass:
+
+1. **Session summary** — scans for a Claude-generated continuation summary and saves it as chunked `note` memories. Highest-quality source — Claude wrote it to preserve context.
+2. **Git scan** — checks if the current repo has new commits since last scan. Saves significant ones as memories. Fast path: if the latest commit hash is already recorded, returns immediately.
+3. **Repo index** — if this repo has never been indexed and has ≤5 000 source files, indexes it now. If already indexed and >24 h stale, re-indexes.
+4. **Embedding backfill** — embeds up to 20 unembedded memories if `[semantic]` is installed.
+
+### What is and isn't captured automatically
+
+**Guaranteed automatic:**
+- Session continuation summaries (Stop hook)
+- Tool events into the replay buffer (PostToolUse hook — every Write/Edit/Bash)
+- New git commits as memories (Stop hook)
+- Repo file structure index (Stop hook, first time + daily refresh)
+- Semantic embeddings for new and existing memories (Stop hook, batched)
+
+**Proactive but not guaranteed:**
+- `decision`, `pattern`, `profile` memories — Claude infers and saves these from conversation. If a decision wasn't stated clearly, it may not be saved. These depend on Claude recognising something worth keeping.
+
+**Never automatic (manual commands):**
+- First index of a repo with >5 000 source files: `brainvault index-repo <path>`
+- Deeper git history beyond 90 days: `brainvault git-scan . --since 2022-01-01`
 
 ---
 
@@ -248,17 +275,19 @@ These are the tools Claude Code calls automatically. You generally don't invoke 
 | `update_memory` | When you say "actually, update that" or "that's no longer true" | Updates content/type/project in-place; re-embeds if content changes |
 | `forget` | When you explicitly ask to remove a memory | Deletes the memory and its vector embedding |
 | `get_code_context` | Before starting non-trivial feature work on an indexed repo | Relevant memories + ranked files + co-change partners for the query topic |
+| `get_recent_activity` | When you ask "what did I work on recently?" or need context before starting a task | Compact index of recent sessions: files touched, commands run, event counts |
+| `get_session_timeline` | When you need the full sequence of changes in a specific session | Chronological list of every Write/Edit/Bash event with summaries |
 
 ### `get_code_context` in detail
 
 This is the most powerful tool for active development. Instead of Claude reading 10–15 files to orient itself before starting a feature, it calls:
 
 ```
-get_code_context(project="myapp", query="auth refresh token")
+get_code_context(project="myapp", query="payment webhook retry")
 ```
 
 And gets back:
-- Memories about auth decisions (from past sessions and git history)
+- Memories about payment decisions (from past sessions and git history)
 - Files mentioned in matching git commit memories
 - Co-change partners — files that historically change together with the relevant files (usually: the implementation, its test, its schema, its middleware)
 - Files whose path matches query terms
@@ -347,13 +376,23 @@ brainvault graph [--open]
     # Generate a self-contained HTML brain graph of all memories.
     # Written to ~/.brainvault/graph.html. --open launches it in the default browser.
     # See "The Memory Graph" section for what this is useful for.
+
+# Session replay
+brainvault sessions [--project <name>] [--days <n>]
+    # List recent Claude Code sessions with event counts and tools used.
+    # Shows session IDs you can drill into with `activity`.
+    # --days defaults to 7.
+
+brainvault activity <session-id>
+    # Show the full chronological event timeline for a session.
+    # Lists every Write / Edit / Bash / TodoWrite / NotebookEdit call with summaries.
 ```
 
 ---
 
 ## Code Intelligence
 
-The `index-repo` command + `get_code_context` MCP tool form the code intelligence layer — the "Graphify" aspect of Brainvault.
+The `index-repo` command + `get_code_context` MCP tool form the code intelligence layer.
 
 ### What indexing builds
 
@@ -367,10 +406,10 @@ brainvault index-repo . --project myapp
 Walks the repo, skips noise directories (`node_modules`, `.venv`, `DerivedData`, etc.), detects language by extension, extracts imports via regex. Stores in the DB:
 
 ```
-auth/jwt.py          python    imports: [hmac, datetime, jose]
-auth/middleware.py   python    imports: [jwt, fastapi, starlette]
-tests/test_auth.py   python    imports: [pytest, auth.jwt, auth.middleware]
-api/routes.py        python    imports: [fastapi, auth.middleware]
+payments/stripe_client.py    python    imports: [stripe, requests, hmac]
+payments/invoice.py          python    imports: [stripe_client, models, decimal]
+tests/test_payments.py       python    imports: [pytest, payments.stripe_client, payments.invoice]
+api/checkout.py              python    imports: [fastapi, payments.invoice, payments.stripe_client]
 ```
 
 Supported languages: Python, JavaScript, TypeScript, Go, Dart, Ruby, Java, Kotlin, Rust.
@@ -379,9 +418,9 @@ Supported languages: Python, JavaScript, TypeScript, Go, Dart, Ruby, Java, Kotli
 A single `git log --name-only` call reads the entire history. For each commit, every pair of source files that appeared together is counted:
 
 ```
-auth/jwt.py  ↔  tests/test_auth.py      47 co-occurrences
-auth/jwt.py  ↔  auth/middleware.py      31 co-occurrences
-schema/user.py  ↔  migrations/0012.py   8 co-occurrences
+payments/stripe_client.py  ↔  tests/test_payments.py    52 co-occurrences
+payments/stripe_client.py  ↔  payments/invoice.py       38 co-occurrences
+schema/order.py  ↔  migrations/0019_add_stripe_id.py    9 co-occurrences
 ```
 
 This is structural memory the codebase has built up over time. Files that always change together are coupled — regardless of what the folder structure implies.
@@ -389,25 +428,26 @@ This is structural memory the codebase has built up over time. Files that always
 ### What Claude gets before starting work
 
 ```
-get_code_context("myapp", "auth refresh token")
+get_code_context("myapp", "payment webhook retry")
 ```
 
 Returns:
 ```
 ## Relevant memories
-[decision] Used JWT with short expiry + refresh tokens — sessions don't work
-           across our mobile/web split. (2024-08-12, project: myapp)
+[decision] Switched Stripe integration to webhooks over polling — polling missed events
+           under load. Added idempotency keys on our end to handle duplicate delivery.
+           (2024-09-03, project: myapp)
 
-[git] a3f91c: refactor auth token flow — revoked old session approach
-      Date: 2024-08-10 | Changed: 4 files, +120 -89 lines
-      Files: auth/jwt.py, auth/middleware.py, tests/test_auth.py
+[git] b7e21a: implement stripe webhook handler with retry queue
+      Date: 2024-09-01 | Changed: 5 files, +210 -34 lines
+      Files: payments/stripe_client.py, payments/webhook.py, workers/retry_handler.py
 
 ## Ranked files
-1. auth/jwt.py           — mentioned in matching git commit
-   Co-changes with: tests/test_auth.py (47×), auth/middleware.py (31×)
-2. auth/middleware.py    — mentioned in matching git commit
-3. tests/test_auth.py   — co-changes with auth/jwt.py (47×)
-4. auth/refresh.py      — file path matches "auth"
+1. payments/stripe_client.py  — mentioned in matching git commit
+   Co-changes with: tests/test_payments.py (52×), payments/invoice.py (38×)
+2. payments/webhook.py        — mentioned in matching git commit
+3. workers/retry_handler.py   — mentioned in matching git commit
+4. tests/test_payments.py     — co-changes with stripe_client.py (52×)
 ```
 
 Claude reads those 4 files and starts work. Without this, it would read 10–15 files to orient.
@@ -420,7 +460,7 @@ Claude reads those 4 files and starts work. Without this, it would read 10–15 
 
 ### Honest limits
 
-- **File-level only** — knows `auth/jwt.py` is relevant, not which function inside it
+- **File-level only** — knows `payments/stripe_client.py` is relevant, not which function inside it
 - **Regex import extraction** — works for 90%+ of cases; misses dynamic imports and eval-based loading
 - **Co-change from history only** — new files with no commits have no co-change data yet
 - **No call graph or type graph** — that would require language servers and significant complexity
@@ -448,11 +488,11 @@ Noise is filtered: WIP commits, auto-merge, dependabot, dependency bumps are all
 ### What a saved memory looks like
 
 ```
-[git] a3f91c: refactor auth middleware to use JWT
-Date: 2024-08-10
+[git] 4f2c9b: migrate from MySQL to PostgreSQL for JSONB support
+Date: 2024-07-15
 Author: Sumith <sumith@example.com>
-Changed: 4 files, +120 -89 lines
-Files: auth/jwt.py, auth/middleware.py, tests/test_auth.py, api/routes.py
+Changed: 12 files, +340 -180 lines
+Files: db/models.py, migrations/0031_postgres.py, config/settings.py, tests/test_models.py
 ```
 
 Tagged `source="git"` so you can filter them. Memory type is inferred from the commit keyword: `refactor`/`migrate`/`remove` → `decision`, `add`/`implement`/`introduce` → `pattern`, `fix` → `note`.
@@ -465,23 +505,47 @@ Every scanned commit hash is recorded in `git_commits_scanned`. Re-running `boot
 
 ## Session Auto-Capture
 
-The Stop hook fires `brainvault.capture` after every agent turn.
+Brainvault installs two hooks in Claude Code:
 
-### What it captures
+### Stop hook — maintenance pass
 
-Only Claude-generated continuation summaries — the structured summary Claude writes at the start of a continuation session when context runs out. These are high-quality because Claude wrote them specifically to preserve the most important context from the session.
+Fires `brainvault.capture` after every agent turn. Each invocation runs four tasks silently:
 
-The summary is chunked by markdown section (each `##` heading becomes a separate memory) so individual sections are searchable without noise from unrelated parts of the same session.
+1. **Session summaries** — scans for Claude-generated continuation summaries, chunks by `##` section, saves as `note` memories.
+2. **Git scan** — checks if the current repo has unscanned commits (one hash lookup). If new commits exist, saves significant ones as memories.
+3. **Repo index** — auto-indexes the current repo on first encounter (if ≤5 000 source files). Re-indexes if the existing index is >24 h stale.
+4. **Embedding backfill** — embeds up to 20 unembedded memories per turn if `[semantic]` is installed.
 
-### What it does NOT capture
+### PostToolUse hook — session replay buffer
+
+Fires `brainvault.tool_capture` after every **Write / Edit / Bash / TodoWrite / NotebookEdit** call. Records a compact event row: session ID, tool name, input summary, and output summary (exit code for Bash). The hook matcher filters at the Claude Code level so Read/Grep/Glob calls never trigger it — only action tools.
+
+This builds a lightweight replay buffer of what Claude did in each session. Query it:
+
+```bash
+brainvault sessions              # list recent sessions
+brainvault activity <session-id> # full timeline for one session
+```
+
+Or via MCP (Claude can call these proactively):
+```
+get_recent_activity(days=7)          # compact index
+get_session_timeline(session_id)     # full drill-in
+```
+
+### What auto-capture does NOT store
 
 - Raw conversation turns — too noisy, low signal
-- Things you said that Claude didn't save as a memory — if you didn't explicitly state a decision and Claude didn't infer it, it's not automatically saved
+- Decisions / patterns / profile inferred from conversation — these depend on Claude recognising something worth saving. If a decision wasn't stated clearly, it may not be captured.
 - Code changes — those live in git
 
 ### Project name detection
 
-The session file lives at `~/.claude/projects/-Users-sumithsb-Projects-myapp/abc123.jsonl`. The directory name encodes the original path — `capture.py` decodes it to derive the project name (`myapp`), so memories are scoped correctly without any configuration.
+The session file lives at `~/.claude/projects/-Users-sumithsb-Projects-myapp/abc123.jsonl`. The directory name encodes the original path — both `capture.py` and `tool_capture.py` decode it to derive the project name (`myapp`), so memories and events are scoped correctly without any configuration.
+
+### Storage and retention
+
+Session events are stored in the `session_events` table. Events older than 90 days are pruned automatically. This is a replay buffer, not long-term memory — significant decisions should still be saved as memories via `save_memory`.
 
 ---
 
@@ -493,7 +557,14 @@ For semantic search — finding memories that are *conceptually* related even if
 
 ```bash
 pip install 'brainvault[semantic]'
-brainvault embed    # backfill embeddings for existing memories (~130MB model download on first run)
+```
+
+The first run downloads BAAI/bge-small-en-v1.5 (~130 MB) to `~/.cache/huggingface`. After that, embeddings are generated locally with no API calls.
+
+New memories are embedded immediately on save. Existing memories without embeddings are backfilled automatically — up to 20 per agent turn via the Stop hook. You can also backfill all at once manually:
+
+```bash
+brainvault embed
 ```
 
 This adds:
@@ -628,13 +699,15 @@ brainvault install   # re-initialises the schema
 ```
 brainvault/
 ├── db.py           — SQLite schema, CRUD, FTS5 full-text search, vector search,
-│                     reflection queries, code intelligence reads/writes.
+│                     reflection queries, code intelligence reads/writes, session replay buffer.
 │                     VALID_MEMORY_TYPES constant. All migrations in _migrate().
-├── mcp_server.py   — 10 MCP tools served via stdio (FastMCP)
+├── mcp_server.py   — 12 MCP tools served via stdio (FastMCP)
 ├── capture.py      — Stop hook handler; extracts continuation summaries from JSONL session files
+├── tool_capture.py — PostToolUse hook handler; records Write/Edit/Bash/TodoWrite/NotebookEdit
+│                     events into session_events table; <20 ms per event, never crashes
 ├── bootstrap.py    — Imports past Claude Code session history into the vault
-├── installer.py    — Patches ~/.claude/settings.json + CLAUDE.md;
-│                     auto-seeds vault from git history + past sessions on install
+├── installer.py    — Patches ~/.claude/settings.json + CLAUDE.md; registers Stop + PostToolUse
+│                     hooks; auto-seeds vault from git history + past sessions on install
 ├── git_scan.py     — Mines git history for significant commits;
 │                     discover_repos() for system-wide bootstrap
 ├── code_scan.py    — File tree walker, regex import extractor, co-change matrix builder;
@@ -643,15 +716,15 @@ brainvault/
 ├── graph.py        — Self-contained D3.js HTML brain graph; two-layer visualization:
 │                     memory nodes (circles) + code file nodes (teal diamonds) from index-repo;
 │                     6 edge types including cochange and memory_file
-└── cli.py          — CLI entry point (14 commands, sys.argv parsing)
+└── cli.py          — CLI entry point (16 commands, sys.argv parsing)
 
 ~/.brainvault/
 └── memory.db       — SQLite database (all memories, projects, vectors, git scan state,
-                      code intelligence index)
+                      code intelligence index, session replay events)
 
 ~/.claude/
-├── settings.json   — MCP server entry + Stop hook entry added by installer
-└── CLAUDE.md       — Brainvault instructions injected/upgraded by installer
+├── settings.json   — MCP server + Stop hook + PostToolUse hook registered here (global, all projects)
+└── CLAUDE.md       — Brainvault instructions injected/upgraded by installer (global, all projects)
 ```
 
 ---
@@ -670,7 +743,7 @@ Adds cosine similarity search via fastembed (BAAI/bge-small-en-v1.5) + sqlite-ve
 ## Development
 
 ```bash
-git clone https://github.com/sumithsb/brainvault
+git clone https://github.com/SumithSB/brainvault
 cd brainvault
 pip install -e ".[dev]"
 pytest

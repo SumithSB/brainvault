@@ -64,6 +64,12 @@ def main() -> None:
     elif cmd == "stats":
         _cmd_stats()
 
+    elif cmd == "sessions":
+        _cmd_sessions()
+
+    elif cmd == "activity":
+        _cmd_activity()
+
     else:
         print(f"Unknown command: {cmd}")
         _print_usage()
@@ -88,6 +94,8 @@ def _print_usage() -> None:
     print("  reflect    Surface cross-project patterns and open decisions")
     print("  forget     Delete a memory by ID")
     print("  stats      Show memory statistics")
+    print("  sessions   List recent Claude Code sessions and their activity")
+    print("  activity   Show full event timeline for a specific session")
 
 
 def _cmd_init() -> None:
@@ -746,3 +754,78 @@ def _cmd_stats() -> None:
         print("\n  By project:")
         for proj, count in sorted(stats["by_project"].items(), key=lambda x: -x[1]):
             print(f"    {proj:<20} {count}")
+
+
+def _cmd_sessions() -> None:
+    """List recent Claude Code sessions and their tool activity."""
+    from brainvault import db
+
+    args = sys.argv[2:]
+    project = None
+    days = 7
+
+    i = 0
+    while i < len(args):
+        if args[i] == "--project" and i + 1 < len(args):
+            project = args[i + 1]
+            i += 2
+        elif args[i] == "--days" and i + 1 < len(args):
+            try:
+                days = int(args[i + 1])
+            except ValueError:
+                print(f"Error: --days must be an integer, got '{args[i + 1]}'")
+                sys.exit(1)
+            i += 2
+        else:
+            i += 1
+
+    db.init_db()
+    data = db.get_recent_activity(project=project, days=days)
+    sessions = data.get("sessions", [])
+    total = data.get("total_events", 0)
+
+    scope = f" [{project}]" if project else ""
+    print(f"Recent sessions{scope} — last {days} days\n")
+
+    if not sessions:
+        print("  No sessions recorded.")
+        return
+
+    print(f"  {total} events across {len(sessions)} session(s)\n")
+    for s in sessions:
+        proj_label = f"[{s['project']}] " if s.get("project") else ""
+        first = (s.get("first_event") or "")[:16]
+        last = (s.get("last_event") or "")[:16]
+        tools = ", ".join(s.get("tools", []))
+        print(f"  {proj_label}{s['session_id'][:16]}…")
+        print(f"    {first} → {last}  |  {s['event_count']} events  |  {tools}")
+        print(f"    brainvault activity {s['session_id']}")
+        print()
+
+
+def _cmd_activity() -> None:
+    """Show the full event timeline for a session ID."""
+    from brainvault import db
+
+    args = sys.argv[2:]
+    if not args or args[0].startswith("--"):
+        print("Usage: brainvault activity <session-id>")
+        sys.exit(1)
+
+    session_id = args[0]
+
+    db.init_db()
+    events = db.get_session_timeline(session_id)
+
+    if not events:
+        print(f"No events found for session '{session_id}'.")
+        return
+
+    print(f"Session timeline: {session_id[:16]}…  ({len(events)} events)\n")
+    for ev in events:
+        ts = (ev.get("timestamp") or "")[:16]
+        tool = ev["tool_name"]
+        summary = ev.get("input_summary", "")
+        out = ev.get("output_summary", "")
+        out_str = f"  → {out}" if out else ""
+        print(f"  {ts}  {tool:<16}  {summary}{out_str}")

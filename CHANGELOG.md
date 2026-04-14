@@ -9,7 +9,32 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Security
+
+- **Graph HTML (`graph`)**: removed unsafe inline `onclick` handlers; connected-node navigation uses DOM listeners; tooltips and badges escape dynamic text consistently
+- **Installer**: invalid `~/.claude/settings.json` no longer causes a destructive rewrite — parse failures abort install after writing a timestamped backup copy
+- **Hooks**: PostToolUse stdin capped at 256 KiB; best-effort redaction of common secret patterns in Bash summaries before persisting to `session_events`
+- **CI / publish workflows**: third-party GitHub Actions pinned to full commit SHAs
+
+### Fixed
+
+- **SQLite**: connection `timeout`, `PRAGMA busy_timeout`, `PRAGMA foreign_keys=ON`; `update_memory` uses a single transaction and respects `rowcount` when a row disappears between read and write
+- **Stop hook / capture**: broad silent failures now log one-line diagnostics to stderr
+- **Git seeding (install)**: per-repo scan failures print a short message to stderr instead of failing silently
+
 ### Added
+- `brainvault/py.typed` marker (PEP 561)
+- `SECURITY.md` and `CODE_OF_CONDUCT.md`
+- Tests: `tests/test_graph.py`, installer settings JSON tests in `tests/test_new_features.py`
+- **One global install** covers all existing and future projects — patches `~/.claude/settings.json` and `~/.claude/CLAUDE.md`, not anything project-specific
+- **Fully automatic after install** — git scan, first-time repo indexing, daily re-index, and embedding backfill all run from the Stop hook with no manual steps; only repos >5 000 source files require explicit `index-repo`
+- **Session replay** (`tool_capture.py`): PostToolUse hook captures every Write/Edit/Bash/TodoWrite/NotebookEdit call as a compact event row; builds a per-session timeline without slowing Claude Code (<20 ms per event, no reads, no embedding)
+- **`session_events` table** in `db.py`: ring buffer storing session activity; pruned at 90 days; new functions `record_tool_event`, `get_session_timeline`, `get_recent_activity`, `prune_old_events`
+- **`get_recent_activity` MCP tool** (11th tool): compact index of recent sessions — event counts, tools used, first/last timestamps; tiered retrieval so Claude loads only what it needs
+- **`get_session_timeline` MCP tool** (12th tool): full chronological event list for a specific session ID
+- **`sessions` CLI command**: list recent sessions with event counts and tool breakdown
+- **`activity` CLI command**: show full event timeline for a session ID
+- **PostToolUse hook** registered by `brainvault install`: matcher `"Write|Edit|Bash|TodoWrite|NotebookEdit"` filters noise at the Claude Code level; only action tools trigger `brainvault.tool_capture`
 - **Code intelligence** (`code_scan.py`): `index-repo` command indexes file structure, detects language, extracts imports, and builds a co-change matrix from git history (files that change together)
 - **`get_code_context` MCP tool** (10th tool): returns ranked relevant files + co-change partners + memories before starting feature work — reduces exploratory file reads
 - **`graph` command** (`graph.py`): generates a self-contained D3.js force-directed HTML brain graph; two-layer visualization — memory nodes (circles, 5 types) + code file nodes (teal diamonds from `index-repo`); 6 edge types including `cochange` (teal solid, files that change together) and `memory_file` (teal dashed, git commit → file it touched); Layer filter chips toggle Memories and Code files independently; search spans file paths, languages, keywords, authors; co-change edges pull highly-coupled files into tight clusters
@@ -31,6 +56,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Smart CLAUDE.md upgrades: re-running `install` replaces the managed block in-place using start/end markers, preserving surrounding user content
 
 ### Changed
+- **Graph layout**: keyword and git file-overlap edges use inverted-index candidate pairs (scales better on large vaults)
+- **Packaging**: PyPI classifier `Development Status :: 4 - Beta`; `Typing :: Typed`
 - `installer.py`: post-install seeding is now automatic (no y/N prompts); TTY-aware progress output
 - `_migrate()` in `db.py`: all schema changes are additive; new indexes on `memories(source)` and `memories(project, created_at)` added for query performance
 - `_extract_keywords()`: capped at first 5 000 chars to avoid scanning huge memory blobs
@@ -52,4 +79,3 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - CLI with `install`, `bootstrap`, `search`, and `stats` commands (`cli.py`)
 - One-command setup: patches `~/.claude/settings.json` and `~/.claude/CLAUDE.md` (`installer.py`)
 - Full test suite (29 tests) covering DB layer and MCP tools
-- `py.typed` marker for type checker support

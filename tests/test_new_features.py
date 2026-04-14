@@ -15,7 +15,9 @@ from brainvault.installer import (
     CLAUDE_MD_SNIPPET,
     ENGRAM_END_MARKER,
     ENGRAM_MARKER,
+    SettingsJsonError,
     _patch_claude_md,
+    _patch_claude_settings,
 )
 
 # ---------------------------------------------------------------------------
@@ -433,3 +435,45 @@ class TestPatchClaudeMd:
         content = md.read_text()
         assert "Old stuff." not in content
         assert "My other notes" in content
+
+
+# ---------------------------------------------------------------------------
+# installer._patch_claude_settings() — invalid JSON must not wipe user config
+# ---------------------------------------------------------------------------
+
+
+class TestPatchClaudeSettings:
+    def test_invalid_json_raises_and_preserves_file(self, tmp_path, monkeypatch):
+        settings = tmp_path / "settings.json"
+        bad = '{ "not": closed'
+        settings.write_text(bad)
+        monkeypatch.setattr("brainvault.installer.CLAUDE_SETTINGS", settings)
+        with pytest.raises(SettingsJsonError) as excinfo:
+            _patch_claude_settings()
+        assert "not valid JSON" in str(excinfo.value)
+        assert settings.read_text() == bad
+        backups = list(tmp_path.glob("settings.json.brainvault-bak.*"))
+        assert len(backups) == 1
+        assert backups[0].read_text() == bad
+
+    def test_valid_json_preserves_unrelated_keys(self, tmp_path, monkeypatch):
+        settings = tmp_path / "settings.json"
+        original = {
+            "permissions": {"allow": ["Bash"]},
+            "mcpServers": {"other": {"command": "true", "args": []}},
+            "hooks": {},
+        }
+        import json
+
+        settings.write_text(json.dumps(original, indent=2))
+        monkeypatch.setattr("brainvault.installer.CLAUDE_SETTINGS", settings)
+        _patch_claude_settings()
+        data = json.loads(settings.read_text())
+        assert data["permissions"] == original["permissions"]
+        assert "other" in data["mcpServers"]
+        assert "brainvault" in data["mcpServers"]
+        assert any(
+            "brainvault.capture" in h.get("command", "")
+            for entry in data["hooks"]["Stop"]
+            for h in entry.get("hooks", [])
+        )

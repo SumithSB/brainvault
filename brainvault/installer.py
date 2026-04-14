@@ -7,11 +7,49 @@ Usage:
     python -m brainvault.installer
 """
 
+import datetime
 import json
 import sys
 from pathlib import Path
 
 from brainvault import db
+
+
+class SettingsJsonError(RuntimeError):
+    """settings.json exists but is not valid JSON — refuse to overwrite user data."""
+
+
+def _backup_corrupt_settings(path: Path) -> Path:
+    """Copy path to a timestamped sibling before any repair attempt."""
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup = path.with_name(f"{path.name}.brainvault-bak.{ts}")
+    backup.write_bytes(path.read_bytes())
+    return backup
+
+
+def _load_claude_settings(path: Path) -> dict:
+    """
+    Parse settings.json. On invalid JSON, write a backup and raise SettingsJsonError.
+    Root must be a JSON object (dict); other shapes are rejected to avoid data loss.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise SettingsJsonError(f"Cannot read {path}: {e}") from e
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        backup = _backup_corrupt_settings(path)
+        raise SettingsJsonError(
+            f"{path} is not valid JSON ({e.msg} at line {e.lineno}). "
+            f"A copy was saved to {backup}. Fix the file manually, then run brainvault install again."
+        ) from e
+    if not isinstance(data, dict):
+        raise SettingsJsonError(
+            f"{path} root must be a JSON object, got {type(data).__name__}. Refusing to modify."
+        )
+    return data
+
 
 ENGRAM_MARKER = "<!-- brainvault-managed -->"
 ENGRAM_END_MARKER = "<!-- /brainvault-managed -->"
@@ -63,8 +101,8 @@ Zero friction — context builds automatically from the natural flow of work.**
 - Starting a new project and want to apply lessons from past ones
 - User mentions the same problem area that appeared in previous projects
 
-Save the *reasoning*, not just the conclusion. "Used JWT" is weak. "Used JWT over sessions because
-the API needs to be stateless for horizontal scaling" is strong.
+Save the *reasoning*, not just the conclusion. "Used Celery" is weak. "Used Celery over RQ because
+the report pipeline needs canvas workflows and retry budgets per task — RQ can't express that" is strong.
 {ENGRAM_END_MARKER}
 """
 
@@ -91,20 +129,32 @@ def _get_stop_hook_entry() -> dict:
     }
 
 
-def _patch_claude_settings() -> tuple[bool, bool]:
+def _get_post_tool_hook_entry() -> dict:
+    exe = sys.executable.replace('"', '\\"')
+    return {
+        "matcher": "Write|Edit|Bash|TodoWrite|NotebookEdit",
+        "hooks": [
+            {
+                "type": "command",
+                "command": f'"{exe}" -m brainvault.tool_capture',
+            }
+        ],
+    }
+
+
+def _patch_claude_settings() -> tuple[bool, bool, bool]:
     """
-    Add mcpServers.brainvault and hooks.Stop entry to ~/.claude/settings.json.
-    Returns (mcp_added, hook_added).
+    Add mcpServers.brainvault, Stop hook, and PostToolUse hook to settings.json.
+    Returns (mcp_added, stop_hook_added, post_tool_hook_added).
+
+    Raises SettingsJsonError if the file exists but cannot be parsed — never overwrites
+    with an empty object.
     """
-    data = {}
-    if CLAUDE_SETTINGS.exists():
-        try:
-            data = json.loads(CLAUDE_SETTINGS.read_text())
-        except json.JSONDecodeError:
-            data = {}
+    data = _load_claude_settings(CLAUDE_SETTINGS) if CLAUDE_SETTINGS.exists() else {}
 
     mcp_added = False
     hook_added = False
+    post_hook_added = False
 
     # MCP server entry
     data.setdefault("mcpServers", {})
@@ -112,18 +162,30 @@ def _patch_claude_settings() -> tuple[bool, bool]:
         data["mcpServers"]["brainvault"] = _get_mcp_entry()
         mcp_added = True
 
-    # Stop hook entry
     data.setdefault("hooks", {})
+
+    # Stop hook entry
     data["hooks"].setdefault("Stop", [])
-    existing_commands = [
+    stop_cmds = [
         h.get("command", "") for entry in data["hooks"]["Stop"] for h in entry.get("hooks", [])
     ]
-    if not any("brainvault.capture" in cmd for cmd in existing_commands):
+    if not any("brainvault.capture" in cmd for cmd in stop_cmds):
         data["hooks"]["Stop"].append(_get_stop_hook_entry())
         hook_added = True
 
+    # PostToolUse hook entry
+    data["hooks"].setdefault("PostToolUse", [])
+    post_cmds = [
+        h.get("command", "")
+        for entry in data["hooks"]["PostToolUse"]
+        for h in entry.get("hooks", [])
+    ]
+    if not any("brainvault.tool_capture" in cmd for cmd in post_cmds):
+        data["hooks"]["PostToolUse"].append(_get_post_tool_hook_entry())
+        post_hook_added = True
+
     CLAUDE_SETTINGS.write_text(json.dumps(data, indent=2))
-    return mcp_added, hook_added
+    return mcp_added, hook_added, post_hook_added
 
 
 def _patch_claude_md() -> str:
@@ -196,8 +258,8 @@ def _seed_vault() -> None:
                 if saved:
                     print(f"  {repo}  →  {saved} memories saved")
                     total_saved += saved
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  (skipped {repo}: {e})", file=sys.stderr)
         print(
             f"\n  ✓ Git scan complete — {total_saved} memories saved across {len(repos)} repos.\n"
         )
@@ -228,7 +290,11 @@ def install() -> None:
         print("    Please ensure Claude Code is installed and has been run at least once.")
         sys.exit(1)
 
-    mcp_added, hook_added = _patch_claude_settings()
+    try:
+        mcp_added, hook_added, post_hook_added = _patch_claude_settings()
+    except SettingsJsonError as e:
+        print(f"  ✗ {e}", file=sys.stderr)
+        sys.exit(1)
     if mcp_added:
         print(f"  ✓ MCP server registered in {CLAUDE_SETTINGS}")
     else:
@@ -238,6 +304,11 @@ def install() -> None:
         print(f"  ✓ Stop hook registered in {CLAUDE_SETTINGS}")
     else:
         print("  · Stop hook already registered (skipped)")
+
+    if post_hook_added:
+        print(f"  ✓ PostToolUse hook registered in {CLAUDE_SETTINGS}")
+    else:
+        print("  · PostToolUse hook already registered (skipped)")
 
     # 3. Patch CLAUDE.md
     md_result = _patch_claude_md()

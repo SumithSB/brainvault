@@ -8,9 +8,10 @@ version = "0.2.0"
 description = "Personal memory layer for Claude Code — knows who you are, what you've built, how you think"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+authors = [{ name = "Sumith SB", email = "sumith2620@gmail.com" }]
 keywords = ["claude", "mcp", "memory", "ai", "claude-code"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -18,16 +19,17 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
 ]
 dependencies = [
     "mcp>=1.0.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/sumithsb/brainvault"
-Repository = "https://github.com/sumithsb/brainvault"
-"Bug Tracker" = "https://github.com/sumithsb/brainvault/issues"
-Changelog = "https://github.com/sumithsb/brainvault/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/SumithSB/brainvault"
+Repository = "https://github.com/SumithSB/brainvault"
+"Bug Tracker" = "https://github.com/SumithSB/brainvault/issues"
+Changelog = "https://github.com/SumithSB/brainvault/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 semantic = [
