@@ -11,13 +11,12 @@ from unittest.mock import patch
 import pytest
 
 from brainvault import db
-from brainvault.installer import (
-    CLAUDE_MD_SNIPPET,
+from brainvault.adapters.claude_code import (
     ENGRAM_END_MARKER,
     ENGRAM_MARKER,
+    INSTRUCTIONS_BODY,
+    ClaudeCodeAdapter,
     SettingsJsonError,
-    _patch_claude_md,
-    _patch_claude_settings,
 )
 
 # ---------------------------------------------------------------------------
@@ -370,15 +369,15 @@ class TestCmdForget:
 
 
 # ---------------------------------------------------------------------------
-# installer._patch_claude_md()
+# ClaudeCodeAdapter.inject_instructions()
 # ---------------------------------------------------------------------------
 
 
 class TestPatchClaudeMd:
     def test_fresh_install_injects_snippet(self, tmp_path, monkeypatch):
         md = tmp_path / "CLAUDE.md"
-        monkeypatch.setattr("brainvault.installer.CLAUDE_MD", md)
-        result = _patch_claude_md()
+        monkeypatch.setattr(ClaudeCodeAdapter, "INSTRUCTIONS_PATH", md)
+        result = ClaudeCodeAdapter().inject_instructions()
         assert result == "injected"
         content = md.read_text()
         assert ENGRAM_MARKER in content
@@ -387,8 +386,8 @@ class TestPatchClaudeMd:
     def test_fresh_install_with_existing_content_appends(self, tmp_path, monkeypatch):
         md = tmp_path / "CLAUDE.md"
         md.write_text("# My notes\n\nSome existing content.\n")
-        monkeypatch.setattr("brainvault.installer.CLAUDE_MD", md)
-        result = _patch_claude_md()
+        monkeypatch.setattr(ClaudeCodeAdapter, "INSTRUCTIONS_PATH", md)
+        result = ClaudeCodeAdapter().inject_instructions()
         assert result == "injected"
         content = md.read_text()
         assert "My notes" in content
@@ -396,17 +395,17 @@ class TestPatchClaudeMd:
 
     def test_already_current_returns_current(self, tmp_path, monkeypatch):
         md = tmp_path / "CLAUDE.md"
-        md.write_text(CLAUDE_MD_SNIPPET)
-        monkeypatch.setattr("brainvault.installer.CLAUDE_MD", md)
-        result = _patch_claude_md()
+        md.write_text(INSTRUCTIONS_BODY)
+        monkeypatch.setattr(ClaudeCodeAdapter, "INSTRUCTIONS_PATH", md)
+        result = ClaudeCodeAdapter().inject_instructions()
         assert result == "current"
 
     def test_old_content_upgrades(self, tmp_path, monkeypatch):
         md = tmp_path / "CLAUDE.md"
         old_snippet = f"{ENGRAM_MARKER}\n## Brainvault Memory\n\nOld instructions here.\n"
         md.write_text(old_snippet)
-        monkeypatch.setattr("brainvault.installer.CLAUDE_MD", md)
-        result = _patch_claude_md()
+        monkeypatch.setattr(ClaudeCodeAdapter, "INSTRUCTIONS_PATH", md)
+        result = ClaudeCodeAdapter().inject_instructions()
         assert result == "upgraded"
         content = md.read_text()
         assert "Old instructions" not in content
@@ -417,8 +416,8 @@ class TestPatchClaudeMd:
         before = "# My personal notes\n\nKeep this.\n\n"
         old_block = f"{ENGRAM_MARKER}\n## Brainvault Memory\nOld stuff.\n"
         md.write_text(before + old_block)
-        monkeypatch.setattr("brainvault.installer.CLAUDE_MD", md)
-        result = _patch_claude_md()
+        monkeypatch.setattr(ClaudeCodeAdapter, "INSTRUCTIONS_PATH", md)
+        result = ClaudeCodeAdapter().inject_instructions()
         assert result == "upgraded"
         content = md.read_text()
         assert "Keep this." in content
@@ -429,8 +428,8 @@ class TestPatchClaudeMd:
         old_block = f"{ENGRAM_MARKER}\n## Brainvault Memory\nOld stuff.\n{ENGRAM_END_MARKER}\n"
         after = "\n# My other notes\n"
         md.write_text(old_block + after)
-        monkeypatch.setattr("brainvault.installer.CLAUDE_MD", md)
-        result = _patch_claude_md()
+        monkeypatch.setattr(ClaudeCodeAdapter, "INSTRUCTIONS_PATH", md)
+        result = ClaudeCodeAdapter().inject_instructions()
         assert result == "upgraded"
         content = md.read_text()
         assert "Old stuff." not in content
@@ -438,7 +437,7 @@ class TestPatchClaudeMd:
 
 
 # ---------------------------------------------------------------------------
-# installer._patch_claude_settings() — invalid JSON must not wipe user config
+# ClaudeCodeAdapter.register_mcp — invalid JSON must not wipe user config
 # ---------------------------------------------------------------------------
 
 
@@ -447,9 +446,9 @@ class TestPatchClaudeSettings:
         settings = tmp_path / "settings.json"
         bad = '{ "not": closed'
         settings.write_text(bad)
-        monkeypatch.setattr("brainvault.installer.CLAUDE_SETTINGS", settings)
+        monkeypatch.setattr(ClaudeCodeAdapter, "SETTINGS_PATH", settings)
         with pytest.raises(SettingsJsonError) as excinfo:
-            _patch_claude_settings()
+            ClaudeCodeAdapter().register_mcp()
         assert "not valid JSON" in str(excinfo.value)
         assert settings.read_text() == bad
         backups = list(tmp_path.glob("settings.json.brainvault-bak.*"))
@@ -466,8 +465,10 @@ class TestPatchClaudeSettings:
         import json
 
         settings.write_text(json.dumps(original, indent=2))
-        monkeypatch.setattr("brainvault.installer.CLAUDE_SETTINGS", settings)
-        _patch_claude_settings()
+        monkeypatch.setattr(ClaudeCodeAdapter, "SETTINGS_PATH", settings)
+        adapter = ClaudeCodeAdapter()
+        adapter.register_mcp()
+        adapter.register_hooks()
         data = json.loads(settings.read_text())
         assert data["permissions"] == original["permissions"]
         assert "other" in data["mcpServers"]

@@ -12,6 +12,16 @@ cd brainvault
 pip install -e ".[dev]"
 ```
 
+### Local PyPI build check (maintainers / before tagging)
+
+```bash
+pip install -e ".[dev]"   # includes build + twine
+python -m build
+python -m twine check dist/*
+```
+
+Fix any `twine check` warnings before pushing a release tag.
+
 ---
 
 ## Running tests
@@ -47,8 +57,11 @@ brainvault/
 ├── tool_capture.py — PostToolUse hook handler; records Write/Edit/Bash/TodoWrite/NotebookEdit
 │                     events into session_events table; <20 ms per event, never crashes
 ├── bootstrap.py    — Imports past Claude Code session history into the vault
-├── installer.py    — Patches ~/.claude/settings.json + CLAUDE.md; registers Stop + PostToolUse
-│                     hooks; auto-seeds vault on install
+├── installer.py    — Dispatches install / uninstall over every detected adapter;
+│                     auto-seeds vault on install
+├── adapters/       — One concrete adapter per host: AgentAdapter ABC in base.py,
+│                     ClaudeCodeAdapter (settings.json + CLAUDE.md + hooks + transcripts),
+│                     CursorAdapter (mcp.json + rules + hooks.json + transcripts)
 ├── git_scan.py     — Mines git history for significant commits; discover_repos() for system scan
 ├── code_scan.py    — File tree walker, regex import extractor, co-change matrix builder
 ├── embeddings.py   — Optional fastembed wrapper (BAAI/bge-small-en-v1.5, lazy singleton)
@@ -57,7 +70,7 @@ brainvault/
 │                     when code_entities/code_cochange tables are populated by index-repo;
 │                     6 edge types: belongs_to, file_overlap, temporal, keyword_overlap,
 │                     cochange, memory_file
-└── cli.py          — CLI entry point (16 commands, manual sys.argv parsing)
+└── cli.py          — CLI entry point (20 commands, manual sys.argv parsing)
 
 tests/
 ├── conftest.py          — autouse fixtures: mock_embeddings (no model download), tmp_db (isolated DB)
@@ -114,6 +127,33 @@ tests/
 5. Open a PR — describe what you changed and why
 
 ---
+
+## Publishing to PyPI (maintainers)
+
+Releases are built and uploaded by [`.github/workflows/publish.yml`](.github/workflows/publish.yml) when you push a **git tag** matching `v*.*.*` (for example `v0.2.0`).
+
+### One-time PyPI setup (trusted publishing)
+
+1. Create the **`brainvault`** project on [PyPI](https://pypi.org/) (or claim the name if unused).
+2. In PyPI → **Your project** → **Publishing** → **Add a new pending publisher** (trusted publishing):
+   - **PyPI Project Name:** `brainvault`
+   - **Owner:** `SumithSB` (GitHub org or user that owns the repo)
+   - **Repository name:** `brainvault`
+   - **Workflow name:** `publish.yml`
+   - **Environment name:** leave **empty** unless you intentionally restrict uploads to a [GitHub Environment](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment); if you set one on PyPI, add a matching `environment:` block to the **publish** job in `publish.yml`.
+3. Save the pending publisher on PyPI; the next successful workflow run from that repo/workflow can complete the link.
+
+Details: [PyPI trusted publishers](https://docs.pypi.org/trusted-publishers/).
+
+### Release checklist
+
+1. Ensure `main` passes CI (`pytest`, `ruff`).
+2. Bump **`version`** in [`pyproject.toml`](pyproject.toml) and add a **`[x.y.z]`** section with date in [`CHANGELOG.md`](CHANGELOG.md) (move notable items out of `[Unreleased]` as appropriate).
+3. Run locally: `python -m build` and `twine check dist/*`.
+4. Tag and push: `git tag vX.Y.Z` then `git push origin vX.Y.Z`.
+5. Confirm the **Publish to PyPI** workflow completes; verify [pypi.org/project/brainvault](https://pypi.org/project/brainvault/).
+
+`workflow_dispatch` on the publish workflow builds artifacts only; upload runs on **tag push** (`v*.*.*`) so releases stay explicit.
 
 ## Security issues
 

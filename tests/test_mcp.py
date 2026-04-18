@@ -3,10 +3,12 @@ tests/test_mcp.py — Tests for MCP tool functions in brainvault/mcp_server.py
 Tests tool functions directly as Python callables (not via MCP protocol).
 """
 
+from brainvault import db
 from brainvault.mcp_server import (
     forget,
     get_my_context,
     get_project,
+    get_session_timeline,
     register_project,
     save_memory,
     search_memory,
@@ -31,6 +33,29 @@ def test_save_memory_with_project():
     )
     assert "Saved. Memory ID:" in result
     assert "project: pluto" in result
+
+
+def test_save_memory_respects_brainvault_source_agent_env(monkeypatch):
+    monkeypatch.setenv("BRAINVAULT_SOURCE_AGENT", "cursor")
+    result = save_memory(content="from cursor host", memory_type="note")
+    assert "Saved. Memory ID:" in result
+    memory_id = result.split("Memory ID: ")[1].split(" ")[0]
+    with db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT source_agent FROM memories WHERE id = ?", (memory_id,)
+        ).fetchone()
+    assert row["source_agent"] == "cursor"
+
+
+def test_save_memory_invalid_env_agent_falls_back(monkeypatch):
+    monkeypatch.setenv("BRAINVAULT_SOURCE_AGENT", "bogus")
+    result = save_memory(content="fallback agent", memory_type="note")
+    memory_id = result.split("Memory ID: ")[1].split(" ")[0]
+    with db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT source_agent FROM memories WHERE id = ?", (memory_id,)
+        ).fetchone()
+    assert row["source_agent"] == "claude_code"
 
 
 def test_save_memory_invalid_type():
@@ -77,6 +102,8 @@ def test_get_my_context_with_data():
     assert "FastAPI" in result
     assert "pluto" in result
     assert "ML job orchestration" in result
+    assert "## Stats" in result
+    assert "memories stored across" in result
 
 
 def test_register_project():
@@ -110,6 +137,38 @@ def test_get_project_not_found():
     result = get_project("nonexistent")
     assert "not found" in result
     assert "register_project" in result
+
+
+def test_get_project_truncates_memories_list():
+    register_project("bigproj", "many notes", ["Python"])
+    for i in range(25):
+        save_memory(f"note-{i}", "note", project="bigproj")
+
+    result = get_project("bigproj")
+    assert "## Memories (25)" in result
+    assert result.count("- [note]") == 20
+    assert "… 5 more" in result
+    assert "search_memory" in result
+
+
+def test_get_session_timeline_truncates_to_recent_events():
+    session_id = "trunc-timeline-mcp-session"
+    for i in range(60):
+        db.record_tool_event(session_id, "Write", f"/src/file{i}.py")
+
+    result = get_session_timeline(session_id)
+    assert "60 events recorded" in result
+    assert result.count("**Write**") == 50
+    assert "10 older event" in result
+
+
+def test_search_memory_truncates_long_content():
+    long_body = "ZUNIQUE_PREFIX_" + ("x" * 500)
+    save_memory(long_body, "note")
+    result = search_memory("ZUNIQUE_PREFIX_")
+    assert "Found 1 memories" in result
+    assert "… (id:" in result
+    assert len(long_body) > 450
 
 
 def test_forget_memory():

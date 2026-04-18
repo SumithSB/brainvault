@@ -366,7 +366,9 @@ def scan_repo(
 
         memory_type = _classify_memory_type(commit)
         content = _format_memory_content(commit, stats)
-        db.save_memory(content, memory_type, project=project, source="git")
+        db.save_memory(
+            content, memory_type, project=project, source="git", source_agent=db.SYSTEM_SOURCE_AGENT
+        )
         db.mark_commit_scanned(repo_key, commit["hash"])
         saved += 1
 

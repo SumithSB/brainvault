@@ -8,6 +8,7 @@ Commands:
     brainvault stats      — show memory statistics
 """
 
+import os
 import sys
 
 
@@ -19,9 +20,19 @@ def main() -> None:
     cmd = sys.argv[1]
 
     if cmd == "install":
-        from brainvault.installer import install
+        _cmd_install()
 
-        install()
+    elif cmd == "uninstall":
+        _cmd_uninstall()
+
+    elif cmd == "doctor":
+        _cmd_doctor()
+
+    elif cmd == "export":
+        _cmd_export()
+
+    elif cmd == "import":
+        _cmd_import()
 
     elif cmd == "init":
         _cmd_init()
@@ -80,7 +91,11 @@ def _print_usage() -> None:
     print("Usage: brainvault <command>")
     print()
     print("Commands:")
-    print("  install    Set up MCP server and Stop hook in Claude Code")
+    print("  install    Detect coding agents, checklist (TTY) or typed selection, then MCP + hooks")
+    print("  uninstall  Remove hooks + MCP entry from Claude Code (--purge also deletes DB)")
+    print("  doctor     Diagnose install health: hooks, MCP, DB, optional deps")
+    print("  export     Export memories + projects as JSON or Markdown")
+    print("  import     Import a previously-exported JSON vault (merge by default)")
     print("  init       Onboard a new project with structured prompts")
     print("  embed      Backfill semantic embeddings for all stored memories")
     print("  git-scan      Mine git history for architectural decision memories")
@@ -94,8 +109,621 @@ def _print_usage() -> None:
     print("  reflect    Surface cross-project patterns and open decisions")
     print("  forget     Delete a memory by ID")
     print("  stats      Show memory statistics")
-    print("  sessions   List recent Claude Code sessions and their activity")
+    print("  sessions   List recent agent sessions and their activity (Claude Code + Cursor)")
     print("  activity   Show full event timeline for a specific session")
+
+
+def _parse_agents_flag(args: list[str]) -> list[str] | None:
+    """
+    Pull --agent / --agents off argv. Accepts repeated flags or comma-separated values.
+
+    Returns None when the flag is absent (meaning: auto-detect installed hosts).
+    """
+    agents: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--agent", "--agents") and i + 1 < len(args):
+            for piece in args[i + 1].split(","):
+                piece = piece.strip()
+                if piece:
+                    agents.append(piece)
+            i += 2
+        else:
+            i += 1
+    return agents or None
+
+
+def _tty_agent_checklist_ok() -> bool:
+    """Use space/arrow checklist when stdin+stdout are TTYs (not piped / CI)."""
+    if os.environ.get("BRAINVAULT_USE_LINE_AGENT_PICK", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return False
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (ValueError, AttributeError):
+        return False
+
+
+def _pick_agents_line_mode(detected: list, not_detected: list) -> list[str] | None:
+    """Original comma-separated / numbered prompt (used when not a TTY or checklist fails)."""
+    print("Detected coding agents:\n")
+    for i, a in enumerate(detected, 1):
+        print(f"  [{i}] {a.display_name}  ({a.name})")
+    if not_detected:
+        print()
+        print("Not detected (can still force with --agent):")
+        for a in not_detected:
+            print(f"      {a.display_name}  ({a.name})")
+
+    print()
+    print("Which agents should brainvault install for?")
+    print("  Enter numbers separated by commas, 'all', or press Enter for all.")
+    print("  Example: 1,2   or   all   or   1")
+    print()
+
+    try:
+        raw = input("  Your choice: ").strip()
+    except EOFError:
+        raw = ""
+
+    if not raw or raw.lower() in ("a", "all"):
+        return None  # install for everything detected
+
+    if raw.lower() in ("n", "none", "0", "q", "quit"):
+        print("\n  Aborted.")
+        return []
+
+    chosen: list[str] = []
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if token.isdigit():
+            idx = int(token)
+            if 1 <= idx <= len(detected):
+                chosen.append(detected[idx - 1].name)
+            else:
+                print(f"  ! '{token}' is out of range — ignored")
+        else:
+            match = next(
+                (a for a in detected if a.name == token or a.display_name.lower() == token.lower()),
+                None,
+            )
+            if match:
+                chosen.append(match.name)
+            else:
+                print(f"  ! '{token}' not recognised — ignored")
+
+    if not chosen:
+        print("\n  No valid selection — aborted.")
+        return []
+
+    return list(dict.fromkeys(chosen))
+
+
+def _pick_agents_interactive(skip_prompt: bool = False) -> list[str] | None:
+    """
+    Detect all known coding agents and let the user choose which ones to install for.
+
+    Returns:
+        None  — install for all detected (no prompt shown, or user chose "all")
+        []    — user cancelled / nothing to install
+        [...]  — explicit list of adapter names the user selected
+
+    skip_prompt=True bypasses the selection (--yes / -y flag or non-interactive stdin).
+    """
+    from brainvault.adapters import ALL_ADAPTERS, all_adapters
+
+    all_known = all_adapters()
+    detected = [a for a in all_known if a.is_installed()]
+    not_detected = [a for a in all_known if not a.is_installed()]
+
+    if not detected:
+        print("  No supported coding agents detected on this machine.")
+        print("  Supported: " + ", ".join(cls.display_name for cls in ALL_ADAPTERS))
+        print("\n  Install Claude Code or Cursor first, then re-run `brainvault install`.")
+        return []
+
+    if len(detected) == 1 or skip_prompt:
+        # Single agent or non-interactive — no selection needed.
+        return None  # caller treats None as "use installed_adapters()"
+
+    if _tty_agent_checklist_ok():
+        try:
+            from brainvault.agent_picker import pick_agents_checklist
+
+            if not_detected:
+                print("Detected coding agents (installed):\n")
+                print("Not installed here (use --agent to force):")
+                for a in not_detected:
+                    print(f"    · {a.display_name}  ({a.name})")
+                print()
+            return pick_agents_checklist(detected)
+        except (OSError, AttributeError, ImportError, ValueError, RuntimeError, TypeError):
+            # TTY checklist failed (e.g. termios on a non-terminal fd) — fall back to line mode.
+            pass
+
+    return _pick_agents_line_mode(detected, not_detected)
+
+
+def _cmd_install() -> None:
+    """Detect coding agents, optionally prompt for selection, then install."""
+    from brainvault.installer import install
+
+    args = sys.argv[2:]
+    explicit_agents = _parse_agents_flag(args)
+    yes = "--yes" in args or "-y" in args
+
+    if explicit_agents is not None:
+        # --agent flag given — skip interactive picker entirely.
+        install(agents=explicit_agents)
+        return
+
+    selected = _pick_agents_interactive(skip_prompt=yes)
+    if selected is not None and len(selected) == 0:
+        # User cancelled or nothing to install.
+        sys.exit(0)
+
+    install(agents=selected)
+
+
+def _cmd_uninstall() -> None:
+    """Reverse install — strip hooks, MCP entry, and managed instruction blocks."""
+    from brainvault.installer import uninstall
+
+    args = sys.argv[2:]
+    purge = "--purge" in args
+    yes = "--yes" in args or "-y" in args
+    agents = _parse_agents_flag(args)
+
+    if purge and not yes:
+        try:
+            confirm = (
+                input(
+                    "This will delete ~/.brainvault/ including memory.db. Type 'yes' to continue: "
+                )
+                .strip()
+                .lower()
+            )
+        except EOFError:
+            confirm = ""
+        if confirm != "yes":
+            print("Aborted.")
+            sys.exit(1)
+
+    uninstall(purge=purge, agents=agents)
+
+
+def _cmd_doctor() -> None:
+    """
+    Diagnose install health. Reports pass/fail per check and exits non-zero on failures.
+
+    Core checks: DB path + integrity + FTS5, MCP module importable, git, semantic extras.
+    Per-adapter checks: each installed adapter contributes its own health_checks().
+    """
+    import shutil
+    import sqlite3
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
+
+    from brainvault import db
+    from brainvault.adapters import all_adapters
+
+    print("Brainvault doctor\n")
+
+    results: list[tuple[str, bool, str]] = []  # (label, ok, detail)
+
+    def check(label: str, ok: bool, detail: str = "") -> None:
+        results.append((label, ok, detail))
+
+    # 1. DB path + integrity + FTS5
+    db_path = db.get_db_path()
+    if not db_path.exists():
+        check("Database file", False, f"not found at {db_path} — run 'brainvault install'")
+    else:
+        try:
+            with sqlite3.connect(db_path) as conn:
+                integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+                check(
+                    "Database integrity",
+                    integrity == "ok",
+                    f"{db_path} — {integrity}",
+                )
+                try:
+                    conn.execute("SELECT COUNT(*) FROM memories_fts").fetchone()
+                    check("FTS5 virtual table", True, "queryable")
+                except sqlite3.OperationalError as e:
+                    check("FTS5 virtual table", False, str(e))
+        except sqlite3.DatabaseError as e:
+            check("Database integrity", False, str(e))
+
+    # 2. Per-adapter health checks
+    any_installed = False
+    for adapter in all_adapters():
+        if not adapter.is_installed():
+            continue
+        any_installed = True
+        for row in adapter.health_checks():
+            results.append(row)
+
+    if not any_installed:
+        check(
+            "Coding agent detected",
+            False,
+            "no supported agent (Claude Code / Cursor) found — install one and re-run",
+        )
+
+    # 3. MCP module importable in the current interpreter
+    exe_to_test = _sys.executable
+    if Path(exe_to_test).is_file():
+        try:
+            r = subprocess.run(
+                [exe_to_test, "-c", "import brainvault.mcp_server"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if r.returncode == 0:
+                check("brainvault.mcp_server importable", True, exe_to_test)
+            else:
+                check(
+                    "brainvault.mcp_server importable",
+                    False,
+                    (r.stderr.strip().splitlines() or [""])[-1],
+                )
+        except Exception as e:
+            check("brainvault.mcp_server importable", False, str(e))
+
+    # 4. Optional semantic stack
+    try:
+        from brainvault import embeddings as emb
+
+        if emb._is_available():
+            check("Semantic extras", True, "fastembed + sqlite-vec available (optional)")
+        else:
+            check("Semantic extras", True, "not installed (optional)")
+    except Exception as e:
+        check("Semantic extras", True, f"unavailable: {e} (optional)")
+
+    # 5. git available — needed for git-scan + code-scan
+    if shutil.which("git"):
+        check("git on PATH", True, shutil.which("git") or "")
+    else:
+        check("git on PATH", False, "git not found — git-scan + index-repo will be unavailable")
+
+    # Render + exit code
+    failed = 0
+    for label, ok, detail in results:
+        mark = "✓" if ok else "✗"
+        line = f"  {mark} {label}"
+        if detail:
+            line += f" — {detail}"
+        print(line)
+        if not ok:
+            failed += 1
+
+    print()
+    if failed:
+        print(f"{failed} check(s) failed. Run 'brainvault install' to repair, or open an issue.")
+        sys.exit(1)
+    else:
+        print("All checks passed.")
+
+
+# ---------------------------------------------------------------------------
+# export / import — JSON + Markdown round-trip of the vault
+# ---------------------------------------------------------------------------
+
+EXPORT_SCHEMA_VERSION = 1
+
+
+def _cmd_export() -> None:
+    """Dump memories + projects to JSON (default) or Markdown."""
+    import datetime
+    import json as _json
+    from pathlib import Path
+
+    from brainvault import db
+
+    args = sys.argv[2:]
+    output: str | None = None
+    fmt = "json"
+    project: str | None = None
+    include_events = False
+
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--output", "-o") and i + 1 < len(args):
+            output = args[i + 1]
+            i += 2
+        elif a == "--format" and i + 1 < len(args):
+            fmt = args[i + 1].lower()
+            i += 2
+        elif a == "--project" and i + 1 < len(args):
+            project = args[i + 1]
+            i += 2
+        elif a == "--include-events":
+            include_events = True
+            i += 1
+        else:
+            print(f"Unknown argument: {a}")
+            print(
+                "Usage: brainvault export [--output <path>] [--format json|md] "
+                "[--project <name>] [--include-events]"
+            )
+            sys.exit(1)
+
+    if fmt not in ("json", "md", "markdown"):
+        print(f"Error: unsupported format '{fmt}'. Use 'json' or 'md'.")
+        sys.exit(1)
+    if fmt == "markdown":
+        fmt = "md"
+
+    db.init_db()
+
+    with db.get_connection() as conn:
+        if project:
+            mem_rows = conn.execute(
+                "SELECT * FROM memories WHERE project = ? ORDER BY created_at",
+                (project,),
+            ).fetchall()
+            proj_rows = conn.execute("SELECT * FROM projects WHERE name = ?", (project,)).fetchall()
+        else:
+            mem_rows = conn.execute("SELECT * FROM memories ORDER BY created_at").fetchall()
+            proj_rows = conn.execute("SELECT * FROM projects ORDER BY name").fetchall()
+
+        memories = [dict(r) for r in mem_rows]
+        projects = [dict(r) for r in proj_rows]
+
+        events = []
+        if include_events:
+            if project:
+                ev_rows = conn.execute(
+                    "SELECT * FROM session_events WHERE project = ? ORDER BY timestamp",
+                    (project,),
+                ).fetchall()
+            else:
+                ev_rows = conn.execute("SELECT * FROM session_events ORDER BY timestamp").fetchall()
+            events = [dict(r) for r in ev_rows]
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    payload = {
+        "schema_version": EXPORT_SCHEMA_VERSION,
+        "exported_at": now,
+        "project_filter": project,
+        "projects": projects,
+        "memories": memories,
+        "events": events,
+    }
+
+    if fmt == "json":
+        default_name = f"brainvault-export-{datetime.date.today().isoformat()}.json"
+        out_path = Path(output) if output else Path.cwd() / default_name
+        out_path.write_text(_json.dumps(payload, indent=2, default=str))
+        print(f"Exported {len(memories)} memories and {len(projects)} projects → {out_path}")
+        if include_events:
+            print(f"  plus {len(events)} session events")
+        return
+
+    # Markdown rendering
+    default_name = f"brainvault-export-{datetime.date.today().isoformat()}.md"
+    out_path = Path(output) if output else Path.cwd() / default_name
+    lines: list[str] = []
+    lines.append("# Brainvault Export")
+    lines.append("")
+    lines.append(f"_Exported {now}_")
+    lines.append("")
+    lines.append(f"- **Memories**: {len(memories)}")
+    lines.append(f"- **Projects**: {len(projects)}")
+    if include_events:
+        lines.append(f"- **Session events**: {len(events)}")
+    lines.append("")
+
+    if projects:
+        lines.append("## Projects")
+        lines.append("")
+        for p in projects:
+            stack = p.get("stack") or "[]"
+            try:
+                stack = (
+                    ", ".join(_json.loads(stack)) if isinstance(stack, str) else ", ".join(stack)
+                )
+            except Exception:
+                pass
+            lines.append(f"### {p['name']}")
+            if p.get("description"):
+                lines.append(p["description"])
+            lines.append(f"- Stack: {stack}")
+            lines.append(f"- Status: {p.get('status', 'active')}")
+            if p.get("notes"):
+                lines.append(f"- Notes: {p['notes']}")
+            lines.append("")
+
+    # Group memories by project
+    grouped: dict[str, list[dict]] = {}
+    for m in memories:
+        grouped.setdefault(m.get("project") or "global", []).append(m)
+
+    for proj_name in sorted(grouped):
+        lines.append(f"## Memories — {proj_name}")
+        lines.append("")
+        for m in grouped[proj_name]:
+            created = (m.get("created_at") or "")[:10]
+            mtype = m.get("memory_type", "note")
+            source = m.get("source", "explicit")
+            lines.append(f"### [{mtype}] {created} _(source: {source})_")
+            content = (m.get("content") or "").strip()
+            lines.append(content)
+            if m.get("outcome"):
+                sentiment = m.get("outcome_sentiment") or "?"
+                lines.append("")
+                lines.append(f"**Outcome ({sentiment})**: {m['outcome']}")
+            lines.append("")
+            lines.append(f"`id: {m['id']}`")
+            lines.append("")
+
+    out_path.write_text("\n".join(lines))
+    print(f"Exported {len(memories)} memories and {len(projects)} projects → {out_path}")
+
+
+def _cmd_import() -> None:
+    """Load a JSON export. Memories with colliding IDs are skipped unless --replace is passed."""
+    import json as _json
+    from pathlib import Path
+
+    from brainvault import db
+
+    args = sys.argv[2:]
+    path_str: str | None = None
+    replace = False
+
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--replace":
+            replace = True
+            i += 1
+        elif not a.startswith("--"):
+            if path_str is None:
+                path_str = a
+            i += 1
+        else:
+            print(f"Unknown argument: {a}")
+            print("Usage: brainvault import <path.json> [--replace]")
+            sys.exit(1)
+
+    if not path_str:
+        print("Usage: brainvault import <path.json> [--replace]")
+        sys.exit(1)
+
+    in_path = Path(path_str).expanduser()
+    if not in_path.is_file():
+        print(f"Error: {in_path} does not exist")
+        sys.exit(1)
+
+    try:
+        payload = _json.loads(in_path.read_text())
+    except _json.JSONDecodeError as e:
+        print(f"Error: {in_path} is not valid JSON ({e.msg} at line {e.lineno})")
+        sys.exit(1)
+
+    if not isinstance(payload, dict) or "memories" not in payload:
+        print("Error: export payload missing 'memories' key — wrong file?")
+        sys.exit(1)
+
+    schema_v = payload.get("schema_version")
+    if schema_v and schema_v > EXPORT_SCHEMA_VERSION:
+        print(
+            f"Error: export schema_version={schema_v} is newer than this "
+            f"brainvault (supports up to {EXPORT_SCHEMA_VERSION}). Upgrade and retry."
+        )
+        sys.exit(1)
+
+    db.init_db()
+
+    mem_imported = 0
+    mem_skipped = 0
+    mem_replaced = 0
+    proj_imported = 0
+
+    with db.get_connection() as conn:
+        # Projects — upsert by name (ON CONFLICT DO UPDATE matches save_project).
+        for p in payload.get("projects", []):
+            try:
+                stack = p.get("stack", "[]")
+                if isinstance(stack, list):
+                    stack = _json.dumps(stack)
+                conn.execute(
+                    """
+                    INSERT INTO projects (name, description, stack, status, notes)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(name) DO UPDATE SET
+                        description = excluded.description,
+                        stack = excluded.stack,
+                        status = excluded.status,
+                        notes = excluded.notes,
+                        updated_at = datetime('now')
+                    """,
+                    (
+                        p["name"],
+                        p.get("description", ""),
+                        stack,
+                        p.get("status", "active"),
+                        p.get("notes", ""),
+                    ),
+                )
+                proj_imported += 1
+            except Exception as e:
+                print(f"  (skipped project {p.get('name')}: {e})")
+
+        for m in payload.get("memories", []):
+            mid = m.get("id")
+            if not mid:
+                mem_skipped += 1
+                continue
+            existing = conn.execute("SELECT 1 FROM memories WHERE id = ?", (mid,)).fetchone()
+            if existing and not replace:
+                mem_skipped += 1
+                continue
+
+            keywords = m.get("keywords", "[]")
+            if isinstance(keywords, list):
+                keywords = _json.dumps(keywords)
+
+            if existing and replace:
+                conn.execute(
+                    """
+                    UPDATE memories SET content=?, memory_type=?, project=?, keywords=?,
+                        source=?, outcome=?, outcome_sentiment=?
+                    WHERE id=?
+                    """,
+                    (
+                        m.get("content", ""),
+                        m.get("memory_type", "note"),
+                        m.get("project"),
+                        keywords,
+                        m.get("source", "explicit"),
+                        m.get("outcome"),
+                        m.get("outcome_sentiment"),
+                        mid,
+                    ),
+                )
+                mem_replaced += 1
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO memories
+                        (id, content, memory_type, project, keywords, source,
+                         created_at, outcome, outcome_sentiment)
+                    VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?)
+                    """,
+                    (
+                        mid,
+                        m.get("content", ""),
+                        m.get("memory_type", "note"),
+                        m.get("project"),
+                        keywords,
+                        m.get("source", "explicit"),
+                        m.get("created_at"),
+                        m.get("outcome"),
+                        m.get("outcome_sentiment"),
+                    ),
+                )
+                mem_imported += 1
+
+    print(
+        f"Imported {mem_imported} new memories, "
+        f"replaced {mem_replaced}, "
+        f"skipped {mem_skipped} (existing). "
+        f"Projects touched: {proj_imported}."
+    )
+    print("Run 'brainvault embed' to regenerate embeddings for imported rows.")
 
 
 def _cmd_init() -> None:
@@ -134,6 +762,7 @@ def _cmd_init() -> None:
             memory_type="decision",
             project=name,
             source="explicit",
+            source_agent=db.SYSTEM_SOURCE_AGENT,
         )
 
     print(f"\nProject '{name}' registered.")
@@ -757,7 +1386,7 @@ def _cmd_stats() -> None:
 
 
 def _cmd_sessions() -> None:
-    """List recent Claude Code sessions and their tool activity."""
+    """List recent sessions (session_events) and their tool activity."""
     from brainvault import db
 
     args = sys.argv[2:]

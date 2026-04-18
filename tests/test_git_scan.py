@@ -372,6 +372,7 @@ def test_scan_repo_saves_significant_commit(tmp_path):
     assert "[git] abc12345" in memories[0]["content"]
     assert memories[0]["memory_type"] == "decision"
     assert memories[0]["source"] == "git"
+    assert memories[0]["source_agent"] == "system"
 
 
 def test_scan_repo_is_idempotent(tmp_path):

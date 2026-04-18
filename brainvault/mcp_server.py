@@ -4,12 +4,22 @@ Runs as a stdio MCP server: python -m brainvault.mcp_server
 """
 
 import json
+import os
 
 from mcp.server.fastmcp import FastMCP
 
 from brainvault import db
 
 mcp = FastMCP("brainvault")
+
+_DEFAULT_SEARCH_MEMORY_MAX_CHARS = 400
+
+
+def _preview_memory_content(text: str, memory_id: str, max_chars: int) -> str:
+    """Truncate memory text for MCP tool output (token control); full text stays in DB."""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + f"… (id: {memory_id})"
 
 
 @mcp.tool()
@@ -77,7 +87,9 @@ def get_my_context() -> str:
 
 
 @mcp.tool()
-def search_memory(query: str, project: str = None) -> str:
+def search_memory(
+    query: str, project: str = None, max_chars: int = _DEFAULT_SEARCH_MEMORY_MAX_CHARS
+) -> str:
     """
     Search your memory for context relevant to a query.
 
@@ -90,6 +102,7 @@ def search_memory(query: str, project: str = None) -> str:
     Args:
         query: What to search for (e.g. 'auth', 'database choice', 'rate limiting')
         project: Optional project name to prioritise results from that project
+        max_chars: Max characters per memory body in the response (default 400); full text remains in DB
     """
     db.init_db()
     if not query.strip():
@@ -113,7 +126,8 @@ def search_memory(query: str, project: str = None) -> str:
         else:
             tag = ""
         lines.append(f"[{i}] {m['memory_type']} · project: {proj_label}{tag}")
-        lines.append(f"    {m['content']}")
+        body = _preview_memory_content(m["content"], m["id"], max_chars)
+        lines.append(f"    {body}")
         if keywords:
             lines.append(f"    Keywords: {', '.join(keywords[:6])}")
         lines.append("")
@@ -148,12 +162,17 @@ def save_memory(
     if memory_type not in db.VALID_MEMORY_TYPES:
         return f"Invalid memory_type '{memory_type}'. Must be one of: {', '.join(sorted(db.VALID_MEMORY_TYPES))}"
 
+    source_agent = (os.environ.get("BRAINVAULT_SOURCE_AGENT") or "claude_code").strip()
+    if source_agent not in db.VALID_SOURCE_AGENTS:
+        source_agent = "claude_code"
+
     memory_id = db.save_memory(
         content=content,
         memory_type=memory_type,
         project=project,
         keywords=keywords,
         source="agent",
+        source_agent=source_agent,
     )
     scope = f"project: {project}" if project else "global"
     return f"Saved. Memory ID: {memory_id} ({memory_type} · {scope})"
@@ -190,14 +209,15 @@ def register_project(
 
 
 @mcp.tool()
-def get_project(name: str) -> str:
+def get_project(name: str, limit: int = 20) -> str:
     """
-    Get everything stored about a specific project — description, stack, notes, and all memories.
+    Get everything stored about a specific project — description, stack, notes, and memories.
 
     Call this when the user mentions a project by name at the start of a session.
 
     Args:
         name: The project name (e.g. 'pluto')
+        limit: Max memories listed (newest first); use search_memory to drill into large projects
     """
     db.init_db()
     project = db.get_project(name)
@@ -221,9 +241,16 @@ def get_project(name: str) -> str:
         lines.append("")
 
     if memories:
-        lines.append(f"## Memories ({len(memories)})")
-        for m in memories:
+        total = len(memories)
+        shown = memories[:limit]
+        lines.append(f"## Memories ({total})")
+        for m in shown:
             lines.append(f"- [{m['memory_type']}] {m['content']}")
+        if total > limit:
+            more = total - limit
+            lines.append(
+                f"… {more} more — call `search_memory` with a topic and project={name!r} to drill in."
+            )
     else:
         lines.append("No memories stored for this project yet.")
 
@@ -480,7 +507,8 @@ def get_recent_activity(
     days: int = 7,
 ) -> str:
     """
-    Return a compact index of recent Claude Code tool activity across sessions.
+    Return a compact index of recent coding-agent tool activity across sessions
+    (Claude Code, Cursor, etc. — see `source_agent` on stored rows).
 
     Surfaces what files were written/edited, what commands ran, and which sessions
     were most active — without loading the full event stream.
@@ -520,12 +548,12 @@ def get_recent_activity(
 
 
 @mcp.tool()
-def get_session_timeline(session_id: str) -> str:
+def get_session_timeline(session_id: str, limit: int = 50) -> str:
     """
-    Return the full ordered event timeline for a specific Claude Code session.
+    Return the ordered event timeline for a specific session (Claude Code, Cursor, etc.).
 
-    Shows every Write / Edit / Bash / TodoWrite / NotebookEdit call with a
-    compact summary of what was done.
+    Shows tool calls with compact summaries. By default returns the **most recent** events
+    (last ``limit`` rows by insert order); older events are omitted with a footer.
 
     Call this when:
     - User asks "what did I do in that session?"
@@ -534,15 +562,29 @@ def get_session_timeline(session_id: str) -> str:
 
     Args:
         session_id: Session ID from get_recent_activity output
+        limit: Max events to return (default 50); increase to see earlier events in long sessions
     """
     db.init_db()
-    events = db.get_session_timeline(session_id)
+    events_all = db.get_session_timeline(session_id)
 
-    if not events:
+    if not events_all:
         return f"No events found for session '{session_id}'."
 
+    total = len(events_all)
+    older_truncated = 0
+    if total > limit:
+        older_truncated = total - limit
+        events = events_all[-limit:]
+    else:
+        events = events_all
+
     lines = [f"# Session Timeline: `{session_id[:12]}…`\n"]
-    lines.append(f"{len(events)} events recorded\n")
+    lines.append(f"{total} events recorded\n")
+    if older_truncated:
+        lines.append(
+            f"… {older_truncated} older event(s) truncated (default limit={limit}); "
+            "pass a higher limit to see earlier events.\n"
+        )
 
     for ev in events:
         ts = (ev.get("timestamp") or "")[:16]

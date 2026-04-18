@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 
 from brainvault import db
+from brainvault.adapters.claude_code import CONTINUATION_MARKER
 from brainvault.bootstrap import _extract_session_data, bootstrap
-from brainvault.capture import CONTINUATION_MARKER
 
 
 def _write_session(path: Path, events: list[dict]) -> None:

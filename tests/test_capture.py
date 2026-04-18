@@ -6,15 +6,16 @@ import json
 from pathlib import Path
 
 from brainvault import db
-from brainvault.capture import (
+from brainvault.adapters.claude_code import (
     CONTINUATION_MARKER,
-    _maybe_backfill_embeddings,
+    ClaudeCodeAdapter,
     chunk_summary,
     clean_continuation_summary,
     extract_continuation_summaries,
     extract_project_name,
-    process_session,
 )
+from brainvault.adapters.cursor import CursorAdapter
+from brainvault.capture import _maybe_backfill_embeddings, process_session
 
 
 def _write_session(path: Path, events: list[dict]) -> None:
@@ -205,13 +206,14 @@ def test_process_session_saves_summary(tmp_path):
         ],
     )
 
-    saved = process_session(session_file)
+    saved = process_session(session_file, ClaudeCodeAdapter())
     assert saved == 1
 
     results = db.search_memories("FastAPI")
     assert len(results) == 1
     assert results[0]["project"] == "pluto"
     assert results[0]["source"] == "hook"
+    assert results[0]["source_agent"] == "claude_code"
 
 
 def test_process_session_idempotent(tmp_path):
@@ -231,8 +233,8 @@ def test_process_session_idempotent(tmp_path):
         ],
     )
 
-    first = process_session(session_file)
-    second = process_session(session_file)
+    first = process_session(session_file, ClaudeCodeAdapter())
+    second = process_session(session_file, ClaudeCodeAdapter())
     assert first == 1
     assert second == 0  # already captured
 
@@ -247,8 +249,33 @@ def test_process_session_no_summary_saves_nothing(tmp_path):
         ],
     )
 
-    saved = process_session(session_file)
+    saved = process_session(session_file, ClaudeCodeAdapter())
     assert saved == 0
+
+
+def test_process_session_cursor_user_queries(tmp_path):
+    sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    session_file = (
+        tmp_path
+        / "projects"
+        / "Users-tester-Projects-myapp"
+        / "agent-transcripts"
+        / sid
+        / f"{sid}.jsonl"
+    )
+    session_file.parent.mkdir(parents=True)
+    long_q = "Plan the database migration and rollback strategy carefully. " * 5
+    _write_session(
+        session_file,
+        [{"role": "user", "message": {"content": [{"type": "text", "text": long_q}]}}],
+    )
+
+    saved = process_session(session_file, CursorAdapter())
+    assert saved == 1
+    rows = db.search_memories("migration")
+    assert len(rows) >= 1
+    assert rows[0]["source_agent"] == "cursor"
+    assert rows[0]["project"] == "myapp"
 
 
 # ---------------------------------------------------------------------------
@@ -476,3 +503,30 @@ def test_maybe_backfill_embeddings_swallows_errors(monkeypatch):
 
     result = _maybe_backfill_embeddings()
     assert result == 0
+
+
+# ---------------------------------------------------------------------------
+# run() — session_events pruning on Stop hook path
+# ---------------------------------------------------------------------------
+
+
+def test_run_prunes_old_session_events(monkeypatch):
+    """capture.run() must call prune_old_events so README retention promise holds."""
+    with db.get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO session_events (session_id, tool_name, input_summary, timestamp)
+            VALUES (?, ?, ?, datetime('now', '-100 days'))
+            """,
+            ("prune-via-capture", "Bash", "echo old"),
+        )
+
+    monkeypatch.setattr("brainvault.capture.ALL_ADAPTERS", ())
+    monkeypatch.setattr("brainvault.capture._maybe_run_git_scan", lambda: 0)
+    monkeypatch.setattr("brainvault.capture._maybe_reindex_repo", lambda: False)
+    monkeypatch.setattr("brainvault.capture._maybe_backfill_embeddings", lambda: 0)
+
+    from brainvault.capture import run
+
+    run()
+    assert db.get_session_timeline("prune-via-capture") == []

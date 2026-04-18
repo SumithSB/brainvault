@@ -6,15 +6,15 @@ All subprocess / stdin I/O is mocked. DB autouse fixture handles isolation.
 import json
 
 from brainvault import db
-from brainvault.tool_capture import (
+from brainvault.adapters.claude_code import (
     CAPTURED_TOOLS,
     _derive_session_id,
     _infer_project,
     _redact_sensitive,
     _summarize_input,
     _summarize_output,
-    process_event,
 )
+from brainvault.tool_capture import process_event
 
 # ---------------------------------------------------------------------------
 # _summarize_input
@@ -188,6 +188,7 @@ def test_process_event_write_saves_to_db():
     assert len(events) == 1
     assert events[0]["tool_name"] == "Write"
     assert "main.py" in events[0]["input_summary"]
+    assert events[0]["source_agent"] == "claude_code"
 
 
 def test_process_event_bash_saves_to_db():
@@ -221,6 +222,23 @@ def test_process_event_multiple_tools_same_session():
     events = db.get_session_timeline(session)
     assert len(events) == 3
     assert [e["tool_name"] for e in events] == ["Write", "Edit", "Bash"]
+
+
+def test_process_event_cursor_posttooluse_read_saves_cursor_source():
+    payload = {
+        "hook_event_name": "postToolUse",
+        "conversation_id": "cursor-sess-1",
+        "workspace_roots": ["/home/u/Projects/zed"],
+        "tool_name": "Read",
+        "tool_input": {"path": "/home/u/Projects/zed/readme.md"},
+        "tool_output": "{}",
+    }
+    process_event(payload)
+    events = db.get_session_timeline("cursor-sess-1")
+    assert len(events) == 1
+    assert events[0]["tool_name"] == "Read"
+    assert events[0]["source_agent"] == "cursor"
+    assert events[0]["project"] == "zed"
 
 
 def test_process_event_bash_exit_code_in_output():

@@ -15,12 +15,15 @@ import sys
 from pathlib import Path
 
 from brainvault import db
-from brainvault.capture import (
+from brainvault.adapters.claude_code import (
     CONTINUATION_MARKER,
+    ClaudeCodeAdapter,
     chunk_summary,
     clean_continuation_summary,
     extract_project_name,
 )
+
+_CLAUDE_AGENT = ClaudeCodeAdapter.name
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
@@ -134,6 +137,7 @@ def bootstrap(verbose: bool = True) -> dict:
                     memory_type="note",
                     project=project,
                     source="bootstrap",
+                    source_agent=_CLAUDE_AGENT,
                 )
                 saved += 1
                 stats["continuation_summaries"] += 1
@@ -147,11 +151,12 @@ def bootstrap(verbose: bool = True) -> dict:
                 memory_type="note",
                 project=project,
                 source="bootstrap",
+                source_agent=_CLAUDE_AGENT,
             )
             saved += 1
             stats["ai_titles"] += 1
 
-        db.mark_session_captured(str(session_path), memory_count=saved)
+        db.mark_session_captured(str(session_path), memory_count=saved, source_agent=_CLAUDE_AGENT)
         stats["total_memories"] += saved
 
         if verbose and saved > 0:

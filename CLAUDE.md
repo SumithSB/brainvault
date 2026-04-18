@@ -1,19 +1,23 @@
 # Brainvault
 
-Personal memory layer for Claude Code. SQLite + FTS5 + optional semantic search + MCP. Zero infrastructure.
+Personal memory layer for Claude Code and Cursor. SQLite + FTS5 + optional semantic search + MCP. Zero infrastructure.
 
 ## Key constraints
 - No Docker, no external services, SQLite only
-- Python 3.10+, Claude Code only (Cursor deferred)
+- Python 3.10+, supports Claude Code + Cursor (one install targets every detected host)
 - Optional semantic extras: `pip install 'brainvault[semantic]'` (fastembed + sqlite-vec)
 
 ## Structure
 - `brainvault/db.py` — storage layer: SQLite schema, FTS5, vector search, reflection queries
 - `brainvault/mcp_server.py` — 12 MCP tools served via stdio
-- `brainvault/cli.py` — CLI entry point (16 commands)
-- `brainvault/capture.py` — Stop hook handler, JSONL continuation summary extractor
-- `brainvault/tool_capture.py` — PostToolUse hook handler; records Write/Edit/Bash/TodoWrite/NotebookEdit events as session replay buffer; <20 ms per event, never crashes
-- `brainvault/installer.py` — patches ~/.claude/settings.json + ~/.claude/CLAUDE.md (upgrades in place); registers Stop + PostToolUse hooks; auto-seeds vault from git history + session summaries on first install
+- `brainvault/cli.py` — CLI entry point (20 commands)
+- `brainvault/capture.py` — Stop hook entry (maintenance + session save); iterates adapters for recent transcript JSONL
+- `brainvault/tool_capture.py` — Tool-hook stdin reader; dispatches payloads to adapters (`owns_payload` / `event_from_payload`); <20 ms per event, never crashes
+- `brainvault/adapters/` — per-host integration layer.
+  - `base.py` — `AgentAdapter` ABC + `HookResult` / `SessionEvent` dataclasses
+  - `claude_code.py` — `~/.claude/settings.json` (MCP + Stop + PostToolUse hooks) + `~/.claude/CLAUDE.md` + transcript parsing
+  - `cursor.py` — `~/.cursor/mcp.json` + `~/.cursor/rules/brainvault.mdc` + `~/.cursor/hooks.json` (stop + postToolUse + afterFileEdit + afterShellExecution) + `~/.cursor/projects/*/agent-transcripts/*/*.jsonl`
+- `brainvault/installer.py` — dispatches install / uninstall over every detected adapter; auto-seeds only when the vault has zero memories (otherwise skip with a hint)
 - `brainvault/bootstrap.py` — imports past Claude Code session history
 - `brainvault/git_scan.py` — mines git history for architectural decision memories; discover_repos() for full-system scan
 - `brainvault/code_scan.py` — file tree walker, regex import extractor, co-change matrix builder; index_repo() orchestrator
@@ -25,7 +29,7 @@ Personal memory layer for Claude Code. SQLite + FTS5 + optional semantic search 
   Layer filter chips, edge toggles, full-text search across paths/languages/keywords
 
 ## Install scope
-One install covers all projects. Patches `~/.claude/settings.json` + `~/.claude/CLAUDE.md` — global Claude Code config, not project-specific. DB at `~/.brainvault/memory.db` is shared across all projects.
+One install covers every detected host + every project. Patches `~/.claude/settings.json` + `~/.claude/CLAUDE.md` (Claude Code) and `~/.cursor/mcp.json` + `~/.cursor/rules/brainvault.mdc` + `~/.cursor/hooks.json` (Cursor). DB at `~/.brainvault/memory.db` is shared across all projects and both hosts — tag `source_agent` on every row distinguishes them.
 
 ## Running
 ```bash
@@ -33,12 +37,16 @@ pip install -e .
 brainvault install
 python -m brainvault.mcp_server   # MCP server (stdio)
 python -m brainvault.capture      # Stop hook handler (runs maintenance pass: summaries, git scan, index, embed)
-python -m brainvault.tool_capture # PostToolUse hook handler (reads JSON from stdin)
+python -m brainvault.tool_capture # Tool-hook handler (reads JSON from stdin)
 ```
 
 ## CLI commands
 ```
 install         Set up MCP server + Stop + PostToolUse hooks + CLAUDE.md; auto-seeds vault
+uninstall       Reverse install (--purge also deletes ~/.brainvault/)
+doctor          Diagnose install health (DB, MCP, hooks, optional deps); exits non-zero on failure
+export          Dump memories + projects as JSON or Markdown (schema-versioned)
+import          Load a previously-exported JSON vault (merge by default, --replace overwrites)
 init            Onboard a new project interactively
 bootstrap       Seed from existing Claude Code session history
 bootstrap-git   Discover and scan all local git repos (default: ~)
@@ -76,17 +84,25 @@ pytest tests/ -v
 - `get_unembedded_memories` / `store_embedding` / `count_embedded`
 - `index_repo_files` / `bulk_record_cochange` / `update_code_index_run` — code intelligence writes
 - `is_repo_indexed` / `get_project_repo_path` / `get_code_context_data` — code intelligence reads
-- `record_tool_event` / `get_session_timeline` / `get_recent_activity(project, days, limit_sessions)` / `prune_old_events(days=90)` — session replay buffer; events pruned after 90 days
+- `record_tool_event` / `get_session_timeline` / `get_recent_activity(project, days, limit_sessions)` / `prune_old_events(days=90)` — session replay buffer; `capture.run()` calls `prune_old_events(90)` each Stop so rows older than 90 days are removed
 - `is_session_captured` / `mark_session_captured` — deduplication for Stop hook capture
 - `VALID_MEMORY_TYPES` — frozenset: `{'profile', 'project', 'decision', 'pattern', 'note'}`
 
 ## Hook details
-- **Stop hook** matcher: `""` (fires on every stop) → `python -m brainvault.capture`
-  Runs 4-step maintenance pass: session summaries → git scan → repo index (first-time + daily refresh, skip if >5k files) → embedding backfill (up to 20/turn)
-- **PostToolUse hook** matcher: `"Write|Edit|Bash|TodoWrite|NotebookEdit"` → `python -m brainvault.tool_capture`
-  Records tool events into session_events replay buffer; <20 ms, never crashes
-- Both hooks quote `sys.executable` to handle paths with spaces
+
+### Claude Code (`~/.claude/settings.json`)
+- **Stop** matcher: `""` (fires on every stop) → `python -m brainvault.capture`
+  Runs maintenance pass: prune old `session_events` (90d) → session summaries → git scan → repo index (first-time + daily refresh, skip if >5k files) → embedding backfill (up to 20/turn)
+- **PostToolUse** matcher: `"Write|Edit|Bash|TodoWrite|NotebookEdit"` → `python -m brainvault.tool_capture`
+  Records tool events into `session_events`; <20 ms, never crashes
+
+### Cursor (`~/.cursor/hooks.json`, user-level)
+- **stop** → `python -m brainvault.capture` (same maintenance pass as Claude Code; Cursor transcripts under `projects/*/agent-transcripts/`)
+- **postToolUse** matcher `"Read|Grep|Task|Delete|MCP:.*"` → `tool_capture` (Write/Shell covered by the next two hooks)
+- **afterFileEdit** / **afterShellExecution** → `tool_capture` for richer file/shell rows
+- All commands quote `sys.executable` to handle paths with spaces
 
 ## Schema migrations
 All additive — handled in `_migrate(conn)` called from `init_db()`. Never drop columns.
-Tables: `memories`, `projects`, `sessions_captured`, `memory_links`, `memories_fts` (virtual), `memory_vectors`, `git_commits_scanned`, `code_entities`, `code_cochange`, `code_index_runs`, `session_events`
+Tables: `memories`, `projects`, `sessions_captured`, `memory_links`, `memories_fts` (virtual), `memory_vectors`, `git_commits_scanned`, `code_entities`, `code_cochange`, `code_index_runs`, `session_events`.
+`memories`, `session_events`, `sessions_captured` each carry a `source_agent TEXT NOT NULL DEFAULT 'claude_code'` column for host attribution.

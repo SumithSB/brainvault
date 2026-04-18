@@ -9,6 +9,33 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **PyPI project metadata** — `readme` in `pyproject.toml` (long description from `README.md`); `Programming Language :: Python :: 3.13` classifier; `build` and `twine` in `[project.optional-dependencies] dev` for local `python -m build` / `python -m twine check dist/*`.
+- **Documentation** — README: scope vs other agent-memory and graph-visualization approaches, roadmap (next releases), and session-start wording aligned with actual `get_my_context()` output.
+- **Cursor support** — `brainvault install` patches both Claude Code and Cursor when either is detected. Cursor integration writes `~/.cursor/mcp.json`, `~/.cursor/rules/brainvault.mdc`, and `~/.cursor/hooks.json` (`stop`, scoped `postToolUse`, `afterFileEdit`, `afterShellExecution`) calling `brainvault.capture` / `brainvault.tool_capture`. Session notes from `~/.cursor/projects/*/agent-transcripts/*/*.jsonl` and tool replay rows are tagged `source_agent='cursor'`.
+- **`AgentAdapter` abstraction** (`brainvault/adapters/`): one adapter per host (`ClaudeCodeAdapter`, `CursorAdapter`). Rest of brainvault is host-agnostic — `installer.py`, `doctor`, and CLI dispatch over `resolve(agents)` / `installed_adapters()` helpers. `--agent claude_code` / `--agent cursor` / `--agent all` flags on `install` + `uninstall` for explicit targeting.
+- **`source_agent` column** on `memories`, `session_events`, `sessions_captured` (additive migration, defaults `'claude_code'` to backfill existing rows). Lets future queries/graphs split memory by host.
+- **`uninstall` command** — cleanly reverses `install`: strips `mcpServers.brainvault`, removes the brainvault Stop + PostToolUse hook entries (preserving unrelated entries), and deletes the managed block from `~/.claude/CLAUDE.md`. Pass `--purge` (with `--yes` for non-interactive) to also delete `~/.brainvault/`.
+- **`doctor` command** — diagnose install health: DB integrity + FTS5 check, adapter-contributed checks (per-host MCP entry + hooks + instruction block markers), `brainvault.mcp_server` importable, optional semantic stack, git on PATH. Non-zero exit when any check fails.
+- **`export` command** — dump memories + projects as JSON (default, schema-versioned) or Markdown. Supports `--project <name>` for single-project export and `--include-events` to also dump the session replay buffer.
+- **`import` command** — restore from a JSON export. Merges by default (skips IDs that already exist); `--replace` overwrites colliding rows. Rejects future schema versions with a clear error.
+- **CI matrix**: `ubuntu-latest`, `macos-latest`, `windows-latest` × Python 3.10/3.12 (3.11 kept on ubuntu only) so macOS- and Windows-specific path issues surface in CI.
+- **`VALID_SOURCE_AGENTS` / `SYSTEM_SOURCE_AGENT`** in `db.py` — validates `source_agent` on `save_memory`, `record_tool_event`, and `mark_session_captured`.
+- **Windows hook smoke** — `tests/test_windows_hook_smoke.py` (skipped on non-Windows) runs the Claude Stop hook command under the platform shell.
+
+### Changed
+
+- **README assets** — logo and graph screenshot use `raw.githubusercontent.com` URLs so the PyPI project page renders images correctly.
+- **CI** — workflow runs on `v*.*.*` tags as well as `main`, so releases are tested the same way as branch pushes.
+- **Publish workflow** — runs `pytest` and `twine check dist/*` before uploading to PyPI.
+- **`get_recent_activity` MCP docstring** — describes cross-host session replay (not Claude Code–only).
+- **Token footprint (MCP + instructions)** — Shorter managed Brainvault block in `adapters/claude_code.py` (`INSTRUCTIONS_BODY`, also injected into Cursor rules). MCP tools: `search_memory` truncates each hit’s body (default `max_chars=400`, suffix `… (id: …)`); `get_project` lists at most 20 memories (newest first) with a footer pointing to `search_memory` for more; `get_session_timeline` returns the last 50 events by default with a footer for older rows (`limit` overridable).
+- **Adapter owns host-specific logic** — `capture.py` iterates all adapters for recent transcripts; `tool_capture.py` routes stdin JSON via `owns_payload` / `event_from_payload` on `ClaudeCodeAdapter` then `CursorAdapter`. PostToolUse summarisers live in `adapters/claude_code.py`; shared redaction in `adapters/_redact.py`. Legacy `installer` `_patch_*` shims removed; `HookResult` gains `removed` for unregister.
+- **`source_agent` populated** at capture/bootstrap/git-scan/MCP boundaries; MCP server reads `BRAINVAULT_SOURCE_AGENT` from the MCP config `env` set by each adapter’s `_mcp_entry`.
+- **`install` auto-seed** runs only when `total_memories == 0`.
+- **`CursorAdapter.is_installed`** — requires a real marker (`mcp.json`, `extensions`, `settings.json`, `User`, or `rules`) under `~/.cursor/`, not an empty directory.
+
 ### Security
 
 - **Graph HTML (`graph`)**: removed unsafe inline `onclick` handlers; connected-node navigation uses DOM listeners; tooltips and badges escape dynamic text consistently
@@ -18,6 +45,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Session replay retention** — each Stop hook run (`brainvault.capture`) calls `db.prune_old_events(90)` so `session_events` older than 90 days are removed, matching documented behaviour.
 - **SQLite**: connection `timeout`, `PRAGMA busy_timeout`, `PRAGMA foreign_keys=ON`; `update_memory` uses a single transaction and respects `rowcount` when a row disappears between read and write
 - **Stop hook / capture**: broad silent failures now log one-line diagnostics to stderr
 - **Git seeding (install)**: per-repo scan failures print a short message to stderr instead of failing silently
@@ -29,7 +57,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **One global install** covers all existing and future projects — patches `~/.claude/settings.json` and `~/.claude/CLAUDE.md`, not anything project-specific
 - **Fully automatic after install** — git scan, first-time repo indexing, daily re-index, and embedding backfill all run from the Stop hook with no manual steps; only repos >5 000 source files require explicit `index-repo`
 - **Session replay** (`tool_capture.py`): PostToolUse hook captures every Write/Edit/Bash/TodoWrite/NotebookEdit call as a compact event row; builds a per-session timeline without slowing Claude Code (<20 ms per event, no reads, no embedding)
-- **`session_events` table** in `db.py`: ring buffer storing session activity; pruned at 90 days; new functions `record_tool_event`, `get_session_timeline`, `get_recent_activity`, `prune_old_events`
+- **`session_events` table** in `db.py`: ring buffer storing session activity; `prune_old_events` + Stop hook (`capture`) enforce 90-day retention; new functions `record_tool_event`, `get_session_timeline`, `get_recent_activity`, `prune_old_events`
 - **`get_recent_activity` MCP tool** (11th tool): compact index of recent sessions — event counts, tools used, first/last timestamps; tiered retrieval so Claude loads only what it needs
 - **`get_session_timeline` MCP tool** (12th tool): full chronological event list for a specific session ID
 - **`sessions` CLI command**: list recent sessions with event counts and tool breakdown

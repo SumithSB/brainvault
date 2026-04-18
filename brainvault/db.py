@@ -14,6 +14,10 @@ VALID_MEMORY_TYPES: frozenset[str] = frozenset(
     {"profile", "project", "decision", "pattern", "note"}
 )
 
+# Host / capture attribution for memories and session replay (additive column source_agent).
+SYSTEM_SOURCE_AGENT = "system"
+VALID_SOURCE_AGENTS: frozenset[str] = frozenset({"claude_code", "cursor", SYSTEM_SOURCE_AGENT})
+
 # Wait up to 30s on connect for the DB lock; retry busy handlers up to 30s per statement.
 _SQLITE_CONNECT_TIMEOUT_S = 30.0
 _SQLITE_BUSY_TIMEOUT_MS = 30000
@@ -237,6 +241,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "idx_memories_project_created" not in existing_indexes:
         conn.execute("CREATE INDEX idx_memories_project_created ON memories(project, created_at)")
 
+    # source_agent column — which coding-agent host produced the row.
+    # Default 'claude_code' backfills pre-existing rows (only Claude was
+    # supported before the adapter refactor). Multi-agent installs tag each
+    # new row at the capture/save site.
+    for table in ("memories", "session_events", "sessions_captured"):
+        cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if "source_agent" not in cols:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN source_agent TEXT NOT NULL DEFAULT 'claude_code'"
+            )
+
 
 def save_memory(
     content: str,
@@ -244,16 +259,21 @@ def save_memory(
     project: str | None = None,
     keywords: list[str] | None = None,
     source: str = "explicit",
+    source_agent: str = "claude_code",
 ) -> str:
+    if source_agent not in VALID_SOURCE_AGENTS:
+        raise ValueError(
+            f"Invalid source_agent {source_agent!r}; must be one of: {sorted(VALID_SOURCE_AGENTS)}"
+        )
     memory_id = str(uuid.uuid4())
     keywords_json = json.dumps(keywords or _extract_keywords(content))
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO memories (id, content, memory_type, project, keywords, source)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO memories (id, content, memory_type, project, keywords, source, source_agent)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (memory_id, content, memory_type, project, keywords_json, source),
+            (memory_id, content, memory_type, project, keywords_json, source, source_agent),
         )
         if project:
             conn.execute(
@@ -683,14 +703,20 @@ def is_session_captured(session_path: str) -> bool:
         return row is not None
 
 
-def mark_session_captured(session_path: str, memory_count: int) -> None:
+def mark_session_captured(
+    session_path: str, memory_count: int, source_agent: str = "claude_code"
+) -> None:
+    if source_agent not in VALID_SOURCE_AGENTS:
+        raise ValueError(
+            f"Invalid source_agent {source_agent!r}; must be one of: {sorted(VALID_SOURCE_AGENTS)}"
+        )
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT OR REPLACE INTO sessions_captured (session_path, memory_count)
-            VALUES (?, ?)
+            INSERT OR REPLACE INTO sessions_captured (session_path, memory_count, source_agent)
+            VALUES (?, ?, ?)
             """,
-            (session_path, memory_count),
+            (session_path, memory_count, source_agent),
         )
 
 
@@ -747,15 +773,27 @@ def record_tool_event(
     input_summary: str,
     output_summary: str = "",
     project: str | None = None,
+    source_agent: str = "claude_code",
 ) -> None:
     """Append one PostToolUse event to the session_events ring buffer."""
+    if source_agent not in VALID_SOURCE_AGENTS:
+        raise ValueError(
+            f"Invalid source_agent {source_agent!r}; must be one of: {sorted(VALID_SOURCE_AGENTS)}"
+        )
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO session_events (session_id, project, tool_name, input_summary, output_summary)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO session_events (session_id, project, tool_name, input_summary, output_summary, source_agent)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (session_id, project, tool_name, input_summary[:500], output_summary[:200]),
+            (
+                session_id,
+                project,
+                tool_name,
+                input_summary[:500],
+                output_summary[:200],
+                source_agent,
+            ),
         )
 
 
@@ -764,7 +802,8 @@ def get_session_timeline(session_id: str) -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
             """
-            SELECT id, session_id, project, tool_name, input_summary, output_summary, timestamp
+            SELECT id, session_id, project, tool_name, input_summary, output_summary, timestamp,
+                   source_agent
             FROM session_events
             WHERE session_id = ?
             ORDER BY id ASC
