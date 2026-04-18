@@ -103,7 +103,7 @@ def test_bootstrap_saves_continuation_summary(tmp_path, monkeypatch):
         ],
     )
 
-    monkeypatch.setattr("brainvault.bootstrap.CLAUDE_PROJECTS_DIR", tmp_path)
+    monkeypatch.setattr("brainvault.bootstrap.claude_projects_dir", lambda: tmp_path)
     stats = bootstrap(verbose=False)
 
     assert stats["continuation_summaries"] == 1
@@ -126,7 +126,7 @@ def test_bootstrap_saves_ai_title_when_no_summary(tmp_path, monkeypatch):
         ],
     )
 
-    monkeypatch.setattr("brainvault.bootstrap.CLAUDE_PROJECTS_DIR", tmp_path)
+    monkeypatch.setattr("brainvault.bootstrap.claude_projects_dir", lambda: tmp_path)
     stats = bootstrap(verbose=False)
 
     assert stats["ai_titles"] == 1
@@ -148,7 +148,7 @@ def test_bootstrap_is_idempotent(tmp_path, monkeypatch):
         ],
     )
 
-    monkeypatch.setattr("brainvault.bootstrap.CLAUDE_PROJECTS_DIR", tmp_path)
+    monkeypatch.setattr("brainvault.bootstrap.claude_projects_dir", lambda: tmp_path)
 
     first = bootstrap(verbose=False)
     second = bootstrap(verbose=False)
@@ -168,7 +168,7 @@ def test_bootstrap_skips_session_with_no_data(tmp_path, monkeypatch):
         ],
     )
 
-    monkeypatch.setattr("brainvault.bootstrap.CLAUDE_PROJECTS_DIR", tmp_path)
+    monkeypatch.setattr("brainvault.bootstrap.claude_projects_dir", lambda: tmp_path)
     stats = bootstrap(verbose=False)
 
     assert stats["total_memories"] == 0
@@ -176,6 +176,8 @@ def test_bootstrap_skips_session_with_no_data(tmp_path, monkeypatch):
 
 
 def test_bootstrap_missing_projects_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr("brainvault.bootstrap.CLAUDE_PROJECTS_DIR", tmp_path / "nonexistent")
+    monkeypatch.setattr(
+        "brainvault.bootstrap.claude_projects_dir", lambda: tmp_path / "nonexistent"
+    )
     stats = bootstrap(verbose=False)
     assert stats["sessions_scanned"] == 0

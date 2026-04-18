@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 from brainvault.adapters._redact import redact_sensitive
-from brainvault.adapters.base import AgentAdapter, HookResult, SessionEvent
+from brainvault.adapters.base import AgentAdapter, HookResult, SessionEvent, _HomeRelativePath
 from brainvault.adapters.claude_code import (
     ENGRAM_END_MARKER,
     ENGRAM_MARKER,
@@ -97,12 +97,12 @@ class CursorAdapter(AgentAdapter):
     name = "cursor"
     display_name = "Cursor"
 
-    CURSOR_DIR = Path.home() / ".cursor"
-    MCP_CONFIG = CURSOR_DIR / "mcp.json"
-    RULES_DIR = CURSOR_DIR / "rules"
-    RULES_FILE = RULES_DIR / "brainvault.mdc"
-    HOOKS_CONFIG = CURSOR_DIR / "hooks.json"
-    SESSIONS_PATH = CURSOR_DIR / "projects"
+    CURSOR_DIR = _HomeRelativePath(".cursor")
+    MCP_CONFIG = _HomeRelativePath(".cursor", "mcp.json")
+    RULES_DIR = _HomeRelativePath(".cursor", "rules")
+    RULES_FILE = _HomeRelativePath(".cursor", "rules", "brainvault.mdc")
+    HOOKS_CONFIG = _HomeRelativePath(".cursor", "hooks.json")
+    SESSIONS_PATH = _HomeRelativePath(".cursor", "projects")
 
     # --- detection --------------------------------------------------------
 
@@ -119,7 +119,7 @@ class CursorAdapter(AgentAdapter):
 
     def _write_mcp_config(self, data: dict) -> None:
         self.MCP_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-        self.MCP_CONFIG.write_text(json.dumps(data, indent=2))
+        self.MCP_CONFIG.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def register_mcp(self) -> bool:
         data = self._load_mcp_config() if self.MCP_CONFIG.exists() else {}
@@ -153,7 +153,7 @@ class CursorAdapter(AgentAdapter):
 
     def _write_hooks(self, data: dict) -> None:
         self.HOOKS_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-        self.HOOKS_CONFIG.write_text(json.dumps(data, indent=2))
+        self.HOOKS_CONFIG.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def _hooks_list_has_marker(self, entries: object, marker: str) -> bool:
         if not isinstance(entries, list):
@@ -263,10 +263,10 @@ class CursorAdapter(AgentAdapter):
         desired = self._rules_body()
 
         if not self.RULES_FILE.exists():
-            self.RULES_FILE.write_text(desired)
+            self.RULES_FILE.write_text(desired, encoding="utf-8")
             return "injected"
 
-        existing = self.RULES_FILE.read_text()
+        existing = self.RULES_FILE.read_text(encoding="utf-8")
         if existing == desired:
             return "current"
 
@@ -279,16 +279,18 @@ class CursorAdapter(AgentAdapter):
             after = existing[end:].lstrip("\n")
             new_block = INSTRUCTIONS_BODY
             separator = "\n\n" if after else ""
-            self.RULES_FILE.write_text(before + new_block + separator + after)
+            self.RULES_FILE.write_text(
+                before + new_block + separator + after, encoding="utf-8"
+            )
             return "upgraded"
 
-        self.RULES_FILE.write_text(desired)
+        self.RULES_FILE.write_text(desired, encoding="utf-8")
         return "upgraded"
 
     def strip_instructions(self) -> str:
         if not self.RULES_FILE.exists():
             return "missing-file"
-        existing = self.RULES_FILE.read_text()
+        existing = self.RULES_FILE.read_text(encoding="utf-8")
         if ENGRAM_MARKER not in existing:
             return "not-present"
         self.RULES_FILE.unlink()
@@ -445,7 +447,7 @@ class CursorAdapter(AgentAdapter):
                 )
 
         if self.RULES_FILE.exists():
-            text = self.RULES_FILE.read_text()
+            text = self.RULES_FILE.read_text(encoding="utf-8")
             has_start = ENGRAM_MARKER in text
             has_end = ENGRAM_END_MARKER in text
             if has_start and has_end:

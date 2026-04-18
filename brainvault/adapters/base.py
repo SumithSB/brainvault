@@ -14,6 +14,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+class _HomeRelativePath:
+    """Descriptor: ``Path.home() / *parts`` resolved at access time.
+
+    Class attributes like ``SETTINGS_PATH = _HomeRelativePath('.claude', 'settings.json')``
+    follow the current home directory (including tests that patch ``HOME`` / ``USERPROFILE``).
+    Assigning a plain :class:`pathlib.Path` on the class replaces the descriptor, which tests rely on.
+    """
+
+    __slots__ = ("_parts",)
+
+    def __init__(self, *parts: str) -> None:
+        self._parts = parts
+
+    def __get__(self, obj: object | None, objtype: type | None = None) -> Path:
+        p = Path.home()
+        for part in self._parts:
+            p = p / part
+        return p
+
+
 @dataclass
 class HookResult:
     """Outcome of (un)registering hooks for an adapter."""

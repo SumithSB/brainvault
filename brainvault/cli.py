@@ -505,7 +505,7 @@ def _cmd_export() -> None:
     if fmt == "json":
         default_name = f"brainvault-export-{datetime.date.today().isoformat()}.json"
         out_path = Path(output) if output else Path.cwd() / default_name
-        out_path.write_text(_json.dumps(payload, indent=2, default=str))
+        out_path.write_text(_json.dumps(payload, indent=2, default=str), encoding="utf-8")
         print(f"Exported {len(memories)} memories and {len(projects)} projects → {out_path}")
         if include_events:
             print(f"  plus {len(events)} session events")
@@ -568,7 +568,7 @@ def _cmd_export() -> None:
             lines.append(f"`id: {m['id']}`")
             lines.append("")
 
-    out_path.write_text("\n".join(lines))
+    out_path.write_text("\n".join(lines), encoding="utf-8")
     print(f"Exported {len(memories)} memories and {len(projects)} projects → {out_path}")
 
 
@@ -608,7 +608,7 @@ def _cmd_import() -> None:
         sys.exit(1)
 
     try:
-        payload = _json.loads(in_path.read_text())
+        payload = _json.loads(in_path.read_text(encoding="utf-8"))
     except _json.JSONDecodeError as e:
         print(f"Error: {in_path} is not valid JSON ({e.msg} at line {e.lineno})")
         sys.exit(1)

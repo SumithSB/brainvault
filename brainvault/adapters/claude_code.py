@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 from brainvault.adapters._redact import redact_sensitive
-from brainvault.adapters.base import AgentAdapter, HookResult, SessionEvent
+from brainvault.adapters.base import AgentAdapter, HookResult, SessionEvent, _HomeRelativePath
 
 
 class SettingsJsonError(RuntimeError):
@@ -209,9 +209,9 @@ class ClaudeCodeAdapter(AgentAdapter):
     name = "claude_code"
     display_name = "Claude Code"
 
-    SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
-    INSTRUCTIONS_PATH = Path.home() / ".claude" / "CLAUDE.md"
-    SESSIONS_PATH = Path.home() / ".claude" / "projects"
+    SETTINGS_PATH = _HomeRelativePath(".claude", "settings.json")
+    INSTRUCTIONS_PATH = _HomeRelativePath(".claude", "CLAUDE.md")
+    SESSIONS_PATH = _HomeRelativePath(".claude", "projects")
 
     # --- detection ---------------------------------------------------------
 
@@ -225,7 +225,7 @@ class ClaudeCodeAdapter(AgentAdapter):
 
     def _write_settings(self, data: dict) -> None:
         self.SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        self.SETTINGS_PATH.write_text(json.dumps(data, indent=2))
+        self.SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def register_mcp(self) -> bool:
         data = self._load_settings() if self.SETTINGS_PATH.exists() else {}
@@ -352,12 +352,17 @@ class ClaudeCodeAdapter(AgentAdapter):
     # --- CLAUDE.md --------------------------------------------------------
 
     def inject_instructions(self) -> str:
-        existing = self.INSTRUCTIONS_PATH.read_text() if self.INSTRUCTIONS_PATH.exists() else ""
+        existing = (
+            self.INSTRUCTIONS_PATH.read_text(encoding="utf-8")
+            if self.INSTRUCTIONS_PATH.exists()
+            else ""
+        )
         self.INSTRUCTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
 
         if ENGRAM_MARKER not in existing:
             self.INSTRUCTIONS_PATH.write_text(
-                existing + ("\n\n" if existing else "") + INSTRUCTIONS_BODY
+                existing + ("\n\n" if existing else "") + INSTRUCTIONS_BODY,
+                encoding="utf-8",
             )
             return "injected"
 
@@ -377,13 +382,15 @@ class ClaudeCodeAdapter(AgentAdapter):
         before = existing[:start]
         after = existing[end:].lstrip("\n")
         separator = "\n\n" if after else ""
-        self.INSTRUCTIONS_PATH.write_text(before + INSTRUCTIONS_BODY + separator + after)
+        self.INSTRUCTIONS_PATH.write_text(
+            before + INSTRUCTIONS_BODY + separator + after, encoding="utf-8"
+        )
         return "upgraded"
 
     def strip_instructions(self) -> str:
         if not self.INSTRUCTIONS_PATH.exists():
             return "missing-file"
-        existing = self.INSTRUCTIONS_PATH.read_text()
+        existing = self.INSTRUCTIONS_PATH.read_text(encoding="utf-8")
         if ENGRAM_MARKER not in existing:
             return "not-present"
 
@@ -397,7 +404,7 @@ class ClaudeCodeAdapter(AgentAdapter):
 
         before = existing[:start].rstrip() + ("\n" if existing[:start].rstrip() else "")
         after = existing[end:].lstrip("\n")
-        self.INSTRUCTIONS_PATH.write_text(before + after)
+        self.INSTRUCTIONS_PATH.write_text(before + after, encoding="utf-8")
         return "removed"
 
     # --- transcript parsing ----------------------------------------------
@@ -513,7 +520,7 @@ class ClaudeCodeAdapter(AgentAdapter):
 
         # Instructions
         if self.INSTRUCTIONS_PATH.exists():
-            text = self.INSTRUCTIONS_PATH.read_text()
+            text = self.INSTRUCTIONS_PATH.read_text(encoding="utf-8")
             has_start = ENGRAM_MARKER in text
             has_end = ENGRAM_END_MARKER in text
             if has_start and has_end:

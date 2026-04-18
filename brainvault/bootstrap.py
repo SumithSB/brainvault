@@ -25,7 +25,10 @@ from brainvault.adapters.claude_code import (
 
 _CLAUDE_AGENT = ClaudeCodeAdapter.name
 
-CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+
+def claude_projects_dir() -> Path:
+    """~/.claude/projects — same as :attr:`ClaudeCodeAdapter.SESSIONS_PATH`, resolved at call time."""
+    return ClaudeCodeAdapter.SESSIONS_PATH
 
 
 def _extract_session_data(session_path: Path) -> tuple[str | None, list[str]]:
@@ -84,11 +87,12 @@ def _get_all_session_files() -> list[Path]:
     Return all top-level JSONL session files in ~/.claude/projects/, oldest first.
     Skips subagent files (nested under session subdirectories).
     """
-    if not CLAUDE_PROJECTS_DIR.exists():
+    root = claude_projects_dir()
+    if not root.exists():
         return []
 
     files = []
-    for jsonl in CLAUDE_PROJECTS_DIR.glob("*/*.jsonl"):
+    for jsonl in root.glob("*/*.jsonl"):
         try:
             files.append((jsonl.stat().st_mtime, jsonl))
         except OSError:
@@ -170,8 +174,9 @@ def run() -> None:
     """CLI entry point: brainvault bootstrap"""
     print("Bootstrapping brainvault from Claude Code history…\n")
 
-    if not CLAUDE_PROJECTS_DIR.exists():
-        print(f"  ✗ No Claude Code projects found at {CLAUDE_PROJECTS_DIR}")
+    root = claude_projects_dir()
+    if not root.exists():
+        print(f"  ✗ No Claude Code projects found at {root}")
         sys.exit(1)
 
     stats = bootstrap(verbose=True)
