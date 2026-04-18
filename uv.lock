@@ -61,7 +61,7 @@ wheels = [
 
 [[package]]
 name = "brainvault"
-version = "0.2.2"
+version = "0.2.4"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },
