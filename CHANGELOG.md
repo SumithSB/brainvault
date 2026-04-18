@@ -9,6 +9,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows CI** — `tests/test_code_scan.py` import-extraction tests no longer write under POSIX-only `/tmp` (use `tmp_path` so `C:\\tmp` is not required on Windows runners).
+
 ## [0.2.0] - 2026-04-18
 
 ### Added
