@@ -221,7 +221,7 @@ def scan_file_tree(repo_path: Path) -> tuple[list[dict], int]:
             if not language:
                 continue
             abs_path = dirpath / name
-            rel_path = str(rel_dir / name) if str(rel_dir) != "." else name
+            rel_path = (rel_dir / name).as_posix()
             imports, ok = _extract_imports(abs_path, language)
             if not ok:
                 parse_errors += 1
