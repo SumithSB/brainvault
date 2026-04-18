@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "brainvault"
-version = "0.2.1"
+version = "0.2.2"
 description = "Personal memory layer for Claude Code and Cursor — knows who you are, what you've built, how you think"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"

@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/SumithSB/brainvault/main/assets/logo.svg" width="96" height="96" alt="Brainvault logo"/>
+  <img src="https://raw.githubusercontent.com/SumithSB/brainvault/main/assets/logo.png" width="96" height="96" alt="Brainvault logo"/>
   <h1>Brainvault</h1>
   <p>Personal memory layer for Claude Code and Cursor.<br/>Stores what you've built, how you think, and decisions you've made — across every session, every project, every agent.</p>
   <p>
