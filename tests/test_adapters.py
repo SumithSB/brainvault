@@ -287,9 +287,9 @@ class TestCursorAdapter:
         header = "---\nalwaysApply: true\n---\n\n# user preamble\n\n"
         old_block = f"{ENGRAM_MARKER}\n## Brainvault Memory\nOld stuff.\n{ENGRAM_END_MARKER}\n"
         trailer = "\n# user epilogue\n"
-        cursor_paths["rules"].write_text(header + old_block + trailer)
+        cursor_paths["rules"].write_text(header + old_block + trailer, encoding="utf-8")
         assert CursorAdapter().inject_instructions() == "upgraded"
-        text = cursor_paths["rules"].read_text()
+        text = cursor_paths["rules"].read_text(encoding="utf-8")
         assert "# user preamble" in text
         assert "# user epilogue" in text
         assert "Old stuff." not in text
