@@ -9,7 +9,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-04-18
+
 ### Fixed
+
+- **Windows** — Adapter instruction and config files (`CLAUDE.md`, Cursor rules, JSON) are read/written with **UTF-8** so Unicode in the managed block (e.g. arrows, dashes) does not raise `UnicodeEncodeError` under cp1252.
+- **Windows / tests** — Claude and Cursor config paths resolve **`Path.home()` at access time** (`_HomeRelativePath`) so `USERPROFILE` / `HOME` overrides in tests and CI apply; `bootstrap.claude_projects_dir()` follows `ClaudeCodeAdapter.SESSIONS_PATH`.
+- **`code_scan.scan_file_tree`** — Relative `file_path` values use **POSIX separators** (`as_posix()`) for stable cross-platform behavior.
+- **CLI** — `export` / `import` file I/O uses UTF-8.
+- **Tests** — Fixture `read_text` / `write_text` for instruction files uses UTF-8 on Windows.
+
+### Changed
+
+- **Formatting** — `ruff format` applied to `brainvault/adapters/cursor.py`.
+
+### Fixed (CI)
 
 - **Windows CI** — `tests/test_code_scan.py` import-extraction tests no longer write under POSIX-only `/tmp` (use `tmp_path` so `C:\\tmp` is not required on Windows runners).
 
