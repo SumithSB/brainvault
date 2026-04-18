@@ -9,6 +9,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-04-18
+
+### Fixed
+
+- **README / PyPI** — Hero logo `<img>` uses an absolute `https://raw.githubusercontent.com/SumithSB/brainvault/main/assets/logo.png` URL so the image renders on **pypi.org** (relative `assets/...` paths do not). With the GitHub repository **public**, that URL is anonymously reachable and the logo displays on both GitHub and PyPI.
+
+## [0.2.3] - 2026-04-18
+
+### Fixed
+
+- **PyPI project page** — README hero logo uses an **absolute** `https://raw.githubusercontent.com/.../assets/logo.png` URL. Relative paths like `assets/logo.png` do not work on PyPI (the browser resolves them against `pypi.org`). The logo displays on PyPI when that URL is **publicly reachable** (repository public, or logo hosted on another public HTTPS URL).
+
+### Changed
+
+- **CONTRIBUTING.md** — Document PyPI README images: absolute URLs, PNG/JPEG preferred over SVG, private-repo caveats.
+- **Assets** — Updated `assets/logo.png` / `assets/logo.svg`.
+
 ## [0.2.2] - 2026-04-18
 
 ### Fixed
