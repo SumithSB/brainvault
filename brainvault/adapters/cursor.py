@@ -279,9 +279,7 @@ class CursorAdapter(AgentAdapter):
             after = existing[end:].lstrip("\n")
             new_block = INSTRUCTIONS_BODY
             separator = "\n\n" if after else ""
-            self.RULES_FILE.write_text(
-                before + new_block + separator + after, encoding="utf-8"
-            )
+            self.RULES_FILE.write_text(before + new_block + separator + after, encoding="utf-8")
             return "upgraded"
 
         self.RULES_FILE.write_text(desired, encoding="utf-8")
