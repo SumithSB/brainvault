@@ -395,7 +395,7 @@ class TestPatchClaudeMd:
 
     def test_already_current_returns_current(self, tmp_path, monkeypatch):
         md = tmp_path / "CLAUDE.md"
-        md.write_text(INSTRUCTIONS_BODY)
+        md.write_text(INSTRUCTIONS_BODY, encoding="utf-8")
         monkeypatch.setattr(ClaudeCodeAdapter, "INSTRUCTIONS_PATH", md)
         result = ClaudeCodeAdapter().inject_instructions()
         assert result == "current"
