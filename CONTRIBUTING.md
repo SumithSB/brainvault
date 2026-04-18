@@ -147,6 +147,17 @@ Releases are built and uploaded by [`.github/workflows/publish.yml`](.github/wor
 
 Details: [PyPI trusted publishers](https://docs.pypi.org/trusted-publishers/).
 
+### PyPI README images
+
+The project page loads images from your README **without** GitHub credentials. URLs like `https://raw.githubusercontent.com/…/assets/logo.png` return **404** for **private** repositories when fetched anonymously, so the logo shows as a broken image on PyPI even if it works for you on GitHub while logged in.
+
+To show a logo on PyPI, either:
+
+- **Make the GitHub repository public** (simplest — same `raw.githubusercontent.com` URLs work for everyone), or  
+- Host `logo.png` on any **public HTTPS URL** (object storage, a tiny public “assets” repo, or a `user-images.githubusercontent.com` link from an uploaded attachment) and point the README `<img src="…">` at that URL.
+
+PyPI’s renderer also strips **SVG** and **data:** / base64 image URLs from HTML for safety, so prefer **PNG** or **JPEG** over HTTPS.
+
 ### Release checklist
 
 1. Ensure `main` passes CI (`pytest`, `ruff`).
