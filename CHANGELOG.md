@@ -9,6 +9,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-18
+
 ### Added
 
 - **PyPI project metadata** — `readme` in `pyproject.toml` (long description from `README.md`); `Programming Language :: Python :: 3.13` classifier; `build` and `twine` in `[project.optional-dependencies] dev` for local `python -m build` / `python -m twine check dist/*`.
@@ -23,34 +25,6 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **CI matrix**: `ubuntu-latest`, `macos-latest`, `windows-latest` × Python 3.10/3.12 (3.11 kept on ubuntu only) so macOS- and Windows-specific path issues surface in CI.
 - **`VALID_SOURCE_AGENTS` / `SYSTEM_SOURCE_AGENT`** in `db.py` — validates `source_agent` on `save_memory`, `record_tool_event`, and `mark_session_captured`.
 - **Windows hook smoke** — `tests/test_windows_hook_smoke.py` (skipped on non-Windows) runs the Claude Stop hook command under the platform shell.
-
-### Changed
-
-- **README assets** — logo and graph screenshot use `raw.githubusercontent.com` URLs so the PyPI project page renders images correctly.
-- **CI** — workflow runs on `v*.*.*` tags as well as `main`, so releases are tested the same way as branch pushes.
-- **Publish workflow** — runs `pytest` and `twine check dist/*` before uploading to PyPI.
-- **`get_recent_activity` MCP docstring** — describes cross-host session replay (not Claude Code–only).
-- **Token footprint (MCP + instructions)** — Shorter managed Brainvault block in `adapters/claude_code.py` (`INSTRUCTIONS_BODY`, also injected into Cursor rules). MCP tools: `search_memory` truncates each hit’s body (default `max_chars=400`, suffix `… (id: …)`); `get_project` lists at most 20 memories (newest first) with a footer pointing to `search_memory` for more; `get_session_timeline` returns the last 50 events by default with a footer for older rows (`limit` overridable).
-- **Adapter owns host-specific logic** — `capture.py` iterates all adapters for recent transcripts; `tool_capture.py` routes stdin JSON via `owns_payload` / `event_from_payload` on `ClaudeCodeAdapter` then `CursorAdapter`. PostToolUse summarisers live in `adapters/claude_code.py`; shared redaction in `adapters/_redact.py`. Legacy `installer` `_patch_*` shims removed; `HookResult` gains `removed` for unregister.
-- **`source_agent` populated** at capture/bootstrap/git-scan/MCP boundaries; MCP server reads `BRAINVAULT_SOURCE_AGENT` from the MCP config `env` set by each adapter’s `_mcp_entry`.
-- **`install` auto-seed** runs only when `total_memories == 0`.
-- **`CursorAdapter.is_installed`** — requires a real marker (`mcp.json`, `extensions`, `settings.json`, `User`, or `rules`) under `~/.cursor/`, not an empty directory.
-
-### Security
-
-- **Graph HTML (`graph`)**: removed unsafe inline `onclick` handlers; connected-node navigation uses DOM listeners; tooltips and badges escape dynamic text consistently
-- **Installer**: invalid `~/.claude/settings.json` no longer causes a destructive rewrite — parse failures abort install after writing a timestamped backup copy
-- **Hooks**: PostToolUse stdin capped at 256 KiB; best-effort redaction of common secret patterns in Bash summaries before persisting to `session_events`
-- **CI / publish workflows**: third-party GitHub Actions pinned to full commit SHAs
-
-### Fixed
-
-- **Session replay retention** — each Stop hook run (`brainvault.capture`) calls `db.prune_old_events(90)` so `session_events` older than 90 days are removed, matching documented behaviour.
-- **SQLite**: connection `timeout`, `PRAGMA busy_timeout`, `PRAGMA foreign_keys=ON`; `update_memory` uses a single transaction and respects `rowcount` when a row disappears between read and write
-- **Stop hook / capture**: broad silent failures now log one-line diagnostics to stderr
-- **Git seeding (install)**: per-repo scan failures print a short message to stderr instead of failing silently
-
-### Added
 - `brainvault/py.typed` marker (PEP 561)
 - `SECURITY.md` and `CODE_OF_CONDUCT.md`
 - Tests: `tests/test_graph.py`, installer settings JSON tests in `tests/test_new_features.py`
@@ -84,6 +58,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Smart CLAUDE.md upgrades: re-running `install` replaces the managed block in-place using start/end markers, preserving surrounding user content
 
 ### Changed
+
+- **README assets** — logo and graph screenshot use `raw.githubusercontent.com` URLs so the PyPI project page renders images correctly.
+- **CI** — workflow runs on `v*.*.*` tags as well as `main`, so releases are tested the same way as branch pushes.
+- **Publish workflow** — runs `pytest` and `twine check dist/*` before uploading to PyPI.
+- **sdist contents** — Hatch excludes `/.claude` and `/uv.lock` from the source tarball so local agent config and the dev lockfile are not published to PyPI.
+- **`get_recent_activity` MCP docstring** — describes cross-host session replay (not Claude Code–only).
+- **Token footprint (MCP + instructions)** — Shorter managed Brainvault block in `adapters/claude_code.py` (`INSTRUCTIONS_BODY`, also injected into Cursor rules). MCP tools: `search_memory` truncates each hit’s body (default `max_chars=400`, suffix `… (id: …)`); `get_project` lists at most 20 memories (newest first) with a footer pointing to `search_memory` for more; `get_session_timeline` returns the last 50 events by default with a footer for older rows (`limit` overridable).
+- **Adapter owns host-specific logic** — `capture.py` iterates all adapters for recent transcripts; `tool_capture.py` routes stdin JSON via `owns_payload` / `event_from_payload` on `ClaudeCodeAdapter` then `CursorAdapter`. PostToolUse summarisers live in `adapters/claude_code.py`; shared redaction in `adapters/_redact.py`. Legacy `installer` `_patch_*` shims removed; `HookResult` gains `removed` for unregister.
+- **`source_agent` populated** at capture/bootstrap/git-scan/MCP boundaries; MCP server reads `BRAINVAULT_SOURCE_AGENT` from the MCP config `env` set by each adapter’s `_mcp_entry`.
+- **`install` auto-seed** runs only when `total_memories == 0`.
+- **`CursorAdapter.is_installed`** — requires a real marker (`mcp.json`, `extensions`, `settings.json`, `User`, or `rules`) under `~/.cursor/`, not an empty directory.
 - **Graph layout**: keyword and git file-overlap edges use inverted-index candidate pairs (scales better on large vaults)
 - **Packaging**: PyPI classifier `Development Status :: 4 - Beta`; `Typing :: Typed`
 - `installer.py`: post-install seeding is now automatic (no y/N prompts); TTY-aware progress output
@@ -92,7 +77,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `except (ImportError, Exception)` in `get_connection()` narrowed to `(ImportError, AttributeError, sqlite3.OperationalError)` — no longer swallows unexpected errors
 - Python import regex: fixed `[\w.,\s]+` → `[\w., \t]+` so newlines don't bleed across import statements
 
+### Security
+
+- **Graph HTML (`graph`)**: removed unsafe inline `onclick` handlers; connected-node navigation uses DOM listeners; tooltips and badges escape dynamic text consistently
+- **Installer**: invalid `~/.claude/settings.json` no longer causes a destructive rewrite — parse failures abort install after writing a timestamped backup copy
+- **Hooks**: PostToolUse stdin capped at 256 KiB; best-effort redaction of common secret patterns in Bash summaries before persisting to `session_events`
+- **CI / publish workflows**: third-party GitHub Actions pinned to full commit SHAs
+
+### Fixed
+
+- **Session replay retention** — each Stop hook run (`brainvault.capture`) calls `db.prune_old_events(90)` so `session_events` older than 90 days are removed, matching documented behaviour.
+- **SQLite**: connection `timeout`, `PRAGMA busy_timeout`, `PRAGMA foreign_keys=ON`; `update_memory` uses a single transaction and respects `rowcount` when a row disappears between read and write
+- **Stop hook / capture**: broad silent failures now log one-line diagnostics to stderr
+- **Git seeding (install)**: per-repo scan failures print a short message to stderr instead of failing silently
+
 ### Removed
+
 - `click` and `rich` removed from `dependencies` in `pyproject.toml` — were listed but never imported
 
 ---

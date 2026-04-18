@@ -14,7 +14,7 @@ We aim to acknowledge within a few business days and coordinate a fix and disclo
 
 ## Scope
 
-Brainvault is **local-first**: data lives in `~/.brainvault/memory.db` and configuration under `~/.claude/`. There is no hosted multi-tenant service; threat modeling should assume **same-user / same-machine** attackers and malicious local data (e.g. opening an untrusted vault file).
+Brainvault is **local-first**: data lives in `~/.brainvault/memory.db`, with host configuration under `~/.claude/` (Claude Code) and/or `~/.cursor/` (Cursor) after `brainvault install`. There is no hosted multi-tenant service; threat modeling should assume **same-user / same-machine** attackers and malicious local data (e.g. opening an untrusted vault file).
 
 ## Supply chain
 

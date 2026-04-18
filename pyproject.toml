@@ -10,11 +10,12 @@ readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Sumith SB", email = "sumith2620@gmail.com" }]
-keywords = ["claude", "mcp", "memory", "ai", "claude-code"]
+keywords = ["claude", "cursor", "mcp", "memory", "ai", "claude-code"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -30,6 +31,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/SumithSB/brainvault"
 Repository = "https://github.com/SumithSB/brainvault"
+Documentation = "https://github.com/SumithSB/brainvault#readme"
 "Bug Tracker" = "https://github.com/SumithSB/brainvault/issues"
 Changelog = "https://github.com/SumithSB/brainvault/blob/main/CHANGELOG.md"
 
@@ -52,6 +54,10 @@ brainvault = "brainvault.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["brainvault"]
+
+# sdist: do not ship local agent config or the uv lockfile (wheel is `brainvault/` only).
+[tool.hatch.build.targets.sdist]
+exclude = ["/.claude", "/uv.lock"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

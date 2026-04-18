@@ -20,6 +20,9 @@ htmlcov/
 # Ruff
 .ruff_cache/
 
+# Local agent tooling (never commit; may contain machine-specific paths)
+.claude/
+
 # IDE
 .vscode/
 .idea/
