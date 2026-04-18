@@ -98,29 +98,29 @@ class TestScanFileTree:
 
 
 class TestPythonImports:
-    def _extract(self, source: str) -> list[str]:
-        tmp = Path("/tmp/_test_brainvault_py.py")
+    def _extract(self, source: str, tmp_path: Path) -> list[str]:
+        tmp = tmp_path / "_test_brainvault_py.py"
         tmp.write_text(source, encoding="utf-8")
         imports, _ = code_scan._extract_imports(tmp, "python")
         return imports
 
-    def test_simple_import(self):
-        assert "os" in self._extract("import os\n")
+    def test_simple_import(self, tmp_path):
+        assert "os" in self._extract("import os\n", tmp_path)
 
-    def test_from_import(self):
-        assert "pathlib" in self._extract("from pathlib import Path\n")
+    def test_from_import(self, tmp_path):
+        assert "pathlib" in self._extract("from pathlib import Path\n", tmp_path)
 
-    def test_multi_import(self):
-        imports = self._extract("import os, sys, json\n")
+    def test_multi_import(self, tmp_path):
+        imports = self._extract("import os, sys, json\n", tmp_path)
         assert "os" in imports
         assert "sys" in imports
         assert "json" in imports
 
-    def test_relative_import(self):
-        assert ".utils" in self._extract("from .utils import helper\n")
+    def test_relative_import(self, tmp_path):
+        assert ".utils" in self._extract("from .utils import helper\n", tmp_path)
 
-    def test_deduplication(self):
-        imports = self._extract("import os\nimport os\n")
+    def test_deduplication(self, tmp_path):
+        imports = self._extract("import os\nimport os\n", tmp_path)
         assert imports.count("os") == 1
 
 
@@ -130,26 +130,29 @@ class TestPythonImports:
 
 
 class TestJavaScriptImports:
-    def _extract(self, source: str, lang: str = "javascript") -> list[str]:
-        tmp = Path(f"/tmp/_test_brainvault.{lang[:2]}")
+    def _extract(self, source: str, tmp_path: Path, *, lang: str = "javascript") -> list[str]:
+        ext = "ts" if lang == "typescript" else "js"
+        tmp = tmp_path / f"_test_brainvault.{ext}"
         tmp.write_text(source, encoding="utf-8")
         imports, _ = code_scan._extract_imports(tmp, lang)
         return imports
 
-    def test_es_module_import(self):
-        assert "react" in self._extract("import React from 'react'\n")
+    def test_es_module_import(self, tmp_path):
+        assert "react" in self._extract("import React from 'react'\n", tmp_path)
 
-    def test_require(self):
-        assert "./utils" in self._extract("const x = require('./utils')\n")
+    def test_require(self, tmp_path):
+        assert "./utils" in self._extract("const x = require('./utils')\n", tmp_path)
 
-    def test_dynamic_import(self):
-        assert "./chunk" in self._extract("import('./chunk')\n")
+    def test_dynamic_import(self, tmp_path):
+        assert "./chunk" in self._extract("import('./chunk')\n", tmp_path)
 
-    def test_typescript_import(self):
-        assert "./types" in self._extract("import type { Foo } from './types'\n", "typescript")
+    def test_typescript_import(self, tmp_path):
+        assert "./types" in self._extract(
+            "import type { Foo } from './types'\n", tmp_path, lang="typescript"
+        )
 
-    def test_named_import(self):
-        assert "lodash" in self._extract("import { map, filter } from 'lodash'\n")
+    def test_named_import(self, tmp_path):
+        assert "lodash" in self._extract("import { map, filter } from 'lodash'\n", tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -158,18 +161,18 @@ class TestJavaScriptImports:
 
 
 class TestGoImports:
-    def _extract(self, source: str) -> list[str]:
-        tmp = Path("/tmp/_test_brainvault.go")
+    def _extract(self, source: str, tmp_path: Path) -> list[str]:
+        tmp = tmp_path / "_test_brainvault.go"
         tmp.write_text(source, encoding="utf-8")
         imports, _ = code_scan._extract_imports(tmp, "go")
         return imports
 
-    def test_single_import(self):
-        assert "fmt" in self._extract('import "fmt"\n')
+    def test_single_import(self, tmp_path):
+        assert "fmt" in self._extract('import "fmt"\n', tmp_path)
 
-    def test_grouped_import(self):
+    def test_grouped_import(self, tmp_path):
         source = 'import (\n    "fmt"\n    "os"\n)\n'
-        imports = self._extract(source)
+        imports = self._extract(source, tmp_path)
         assert "fmt" in imports
         assert "os" in imports
 
@@ -180,18 +183,18 @@ class TestGoImports:
 
 
 class TestDartImports:
-    def _extract(self, source: str) -> list[str]:
-        tmp = Path("/tmp/_test_brainvault.dart")
+    def _extract(self, source: str, tmp_path: Path) -> list[str]:
+        tmp = tmp_path / "_test_brainvault.dart"
         tmp.write_text(source, encoding="utf-8")
         imports, _ = code_scan._extract_imports(tmp, "dart")
         return imports
 
-    def test_package_import(self):
-        imports = self._extract("import 'package:flutter/material.dart';\n")
+    def test_package_import(self, tmp_path):
+        imports = self._extract("import 'package:flutter/material.dart';\n", tmp_path)
         assert "package:flutter/material.dart" in imports
 
-    def test_relative_import(self):
-        imports = self._extract("import '../auth/service.dart';\n")
+    def test_relative_import(self, tmp_path):
+        imports = self._extract("import '../auth/service.dart';\n", tmp_path)
         assert "../auth/service.dart" in imports
 
 
