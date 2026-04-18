@@ -1,69 +1,88 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#1a1f2e"/>
-      <stop offset="100%" style="stop-color:#0d1117"/>
+    <radialGradient id="bg" cx="50%" cy="42%" r="58%">
+      <stop offset="0%" stop-color="#1c2338"/>
+      <stop offset="100%" stop-color="#080c16"/>
+    </radialGradient>
+    <linearGradient id="brainFill" x1="15%" y1="0%" x2="85%" y2="100%">
+      <stop offset="0%" stop-color="#5ba7ff"/>
+      <stop offset="100%" stop-color="#9c5ef5"/>
     </linearGradient>
-    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#58a6ff"/>
-      <stop offset="100%" style="stop-color:#a371f7"/>
+    <linearGradient id="lockFill" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6ab5ff"/>
+      <stop offset="100%" stop-color="#b07ef8"/>
     </linearGradient>
+    <filter id="softglow">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
   </defs>
 
-  <!-- Background circle -->
-  <circle cx="60" cy="60" r="58" fill="url(#bg)" stroke="#30363d" stroke-width="1.5"/>
+  <!-- Background disc -->
+  <circle cx="100" cy="100" r="97" fill="url(#bg)"/>
+  <circle cx="100" cy="100" r="97" fill="none" stroke="#28335a" stroke-width="2.5"/>
 
-  <!-- Brain shape — two lobes -->
+  <!-- ── BRAIN (top-down, two lobes) ── -->
+
   <!-- Left lobe -->
-  <path d="M60 38
-    C60 38 50 36 44 40
-    C38 44 36 50 37 56
-    C36 58 34 61 35 65
-    C36 69 40 71 43 70
-    C44 73 46 76 50 77
-    C54 78 58 76 60 74"
-    fill="none" stroke="url(#glow)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="
+    M 100 44
+    C  95 44  82 44  73 51
+    C  62 59  58 71  57 81
+    C  56 89  58 96  54 104
+    C  50 112  48 118  53 124
+    C  57 130  67 132  76 129
+    C  83 126  89 120  93 117
+    C  96 119  98 121  100 121
+    Z
+  " fill="url(#brainFill)"/>
 
   <!-- Right lobe -->
-  <path d="M60 38
-    C60 38 70 36 76 40
-    C82 44 84 50 83 56
-    C84 58 86 61 85 65
-    C84 69 80 71 77 70
-    C76 73 74 76 70 77
-    C66 78 62 76 60 74"
-    fill="none" stroke="url(#glow)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="
+    M 100 44
+    C 105 44 118 44 127 51
+    C 138 59 142 71 143 81
+    C 144 89 142 96 146 104
+    C 150 112 152 118 147 124
+    C 143 130 133 132 124 129
+    C 117 126 111 120 107 117
+    C 104 119 102 121 100 121
+    Z
+  " fill="url(#brainFill)"/>
 
-  <!-- Brain stem -->
-  <line x1="60" y1="74" x2="60" y2="80" stroke="url(#glow)" stroke-width="2.2" stroke-linecap="round"/>
+  <!-- Longitudinal fissure (centre gap) -->
+  <rect x="98" y="44" width="4" height="77" fill="#080c16"/>
 
-  <!-- Brain sulci — left -->
-  <path d="M46 48 C47 52 45 57 47 61" fill="none" stroke="url(#glow)" stroke-width="1.3" stroke-linecap="round" opacity="0.7"/>
-  <path d="M41 56 C44 58 44 62 43 65" fill="none" stroke="url(#glow)" stroke-width="1.3" stroke-linecap="round" opacity="0.7"/>
+  <!-- Sulci — left -->
+  <path d="M 77 57 C 73 66 72 75 75 83"
+        fill="none" stroke="#080c16" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M 64 77 C 67 86 66 95 69 103"
+        fill="none" stroke="#080c16" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M 58 103 C 61 110 60 118 64 124"
+        fill="none" stroke="#080c16" stroke-width="2" stroke-linecap="round"/>
 
-  <!-- Brain sulci — right -->
-  <path d="M74 48 C73 52 75 57 73 61" fill="none" stroke="url(#glow)" stroke-width="1.3" stroke-linecap="round" opacity="0.7"/>
-  <path d="M79 56 C76 58 76 62 77 65" fill="none" stroke="url(#glow)" stroke-width="1.3" stroke-linecap="round" opacity="0.7"/>
+  <!-- Sulci — right -->
+  <path d="M 123 57 C 127 66 128 75 125 83"
+        fill="none" stroke="#080c16" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M 136 77 C 133 86 134 95 131 103"
+        fill="none" stroke="#080c16" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M 142 103 C 139 110 140 118 136 124"
+        fill="none" stroke="#080c16" stroke-width="2" stroke-linecap="round"/>
 
-  <!-- Center divide -->
-  <line x1="60" y1="38" x2="60" y2="74" stroke="url(#glow)" stroke-width="1" stroke-linecap="round" opacity="0.4" stroke-dasharray="2,3"/>
+  <!-- ── LOCK (vault symbol) ── -->
 
-  <!-- Memory nodes — small glowing dots -->
-  <circle cx="49" cy="54" r="2.5" fill="#58a6ff" opacity="0.9"/>
-  <circle cx="55" cy="64" r="2"   fill="#a371f7" opacity="0.9"/>
-  <circle cx="71" cy="54" r="2.5" fill="#58a6ff" opacity="0.9"/>
-  <circle cx="65" cy="64" r="2"   fill="#a371f7" opacity="0.9"/>
-  <circle cx="60" cy="50" r="2"   fill="#3fb950" opacity="0.9"/>
+  <!-- Shackle -->
+  <path d="M 85 153 L 85 145 C 85 133 115 133 115 145 L 115 153"
+        fill="none" stroke="url(#lockFill)" stroke-width="5.5"
+        stroke-linecap="round" stroke-linejoin="round" filter="url(#softglow)"/>
 
-  <!-- Connection lines between nodes -->
-  <line x1="49" y1="54" x2="55" y2="64" stroke="#58a6ff" stroke-width="0.8" opacity="0.5"/>
-  <line x1="71" y1="54" x2="65" y2="64" stroke="#58a6ff" stroke-width="0.8" opacity="0.5"/>
-  <line x1="49" y1="54" x2="60" y2="50" stroke="#3fb950" stroke-width="0.8" opacity="0.5"/>
-  <line x1="71" y1="54" x2="60" y2="50" stroke="#3fb950" stroke-width="0.8" opacity="0.5"/>
-  <line x1="55" y1="64" x2="65" y2="64" stroke="#a371f7" stroke-width="0.8" opacity="0.5"/>
+  <!-- Body -->
+  <rect x="79" y="153" width="42" height="30" rx="6" fill="url(#lockFill)" filter="url(#softglow)"/>
 
-  <!-- Vault keyhole at bottom -->
-  <circle cx="60" cy="92" r="7" fill="none" stroke="url(#glow)" stroke-width="1.8"/>
-  <rect x="57.5" y="92" width="5" height="6" rx="1" fill="url(#glow)" opacity="0.8"/>
-  <circle cx="60" cy="92" r="2.5" fill="url(#glow)" opacity="0.9"/>
+  <!-- Keyhole -->
+  <circle cx="100" cy="165" r="6.5" fill="#080c16"/>
+  <rect x="97" y="169" width="6" height="8" rx="2" fill="#080c16"/>
 </svg>

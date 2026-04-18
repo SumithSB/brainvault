@@ -9,6 +9,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-04-18
+
+### Changed
+
+- **CONTRIBUTING.md** — Expanded *PyPI README images* (public repo / absolute URLs, PNG vs SVG).
+- **Assets** — Updated `assets/logo.png` and `assets/logo.svg` (refined artwork; PyPI README still references `logo.png` via `raw.githubusercontent.com`).
+
 ## [0.2.4] - 2026-04-18
 
 ### Fixed
