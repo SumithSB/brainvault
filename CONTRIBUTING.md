@@ -22,6 +22,8 @@ python -m twine check dist/*
 
 Fix any `twine check` warnings before pushing a release tag.
 
+The **sdist** tarball intentionally omits `/.claude` and `/uv.lock` (see `pyproject.toml` → `[tool.hatch.build.targets.sdist]`) so local Claude config and the dev lockfile are never published; the **wheel** contains only the `brainvault` package plus `LICENSE` metadata.
+
 ---
 
 ## Running tests
