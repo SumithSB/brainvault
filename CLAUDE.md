@@ -18,7 +18,7 @@ Personal memory layer for Claude Code and Cursor. SQLite + FTS5 + optional seman
   - `claude_code.py` — `~/.claude/settings.json` (MCP + Stop + PostToolUse hooks) + `~/.claude/CLAUDE.md` + transcript parsing
   - `cursor.py` — `~/.cursor/mcp.json` + `~/.cursor/rules/brainvault.mdc` + `~/.cursor/hooks.json` (stop + postToolUse + afterFileEdit + afterShellExecution) + `~/.cursor/projects/*/agent-transcripts/*/*.jsonl`
 - `brainvault/installer.py` — dispatches install / uninstall over every detected adapter; auto-seeds only when the vault has zero memories (otherwise skip with a hint)
-- `brainvault/bootstrap.py` — imports past Claude Code session history
+- `brainvault/bootstrap.py` — bulk-imports session transcripts (Claude Code `~/.claude/projects` + Cursor `~/.cursor/projects/.../agent-transcripts`)
 - `brainvault/git_scan.py` — mines git history for architectural decision memories; discover_repos() for full-system scan
 - `brainvault/code_scan.py` — file tree walker, regex import extractor, co-change matrix builder; index_repo() orchestrator
 - `brainvault/embeddings.py` — fastembed wrapper (BAAI/bge-small-en-v1.5, lazy-loaded singleton)
@@ -48,7 +48,7 @@ doctor          Diagnose install health (DB, MCP, hooks, optional deps); exits n
 export          Dump memories + projects as JSON or Markdown (schema-versioned)
 import          Load a previously-exported JSON vault (merge by default, --replace overwrites)
 init            Onboard a new project interactively
-bootstrap       Seed from existing Claude Code session history
+bootstrap       Bulk-import session history (Claude + Cursor); `--host claude_code|cursor|all`
 bootstrap-git   Discover and scan all local git repos (default: ~)
 git-scan        Scan a single git repo
 index-repo      Index file structure and co-change matrix for a repo

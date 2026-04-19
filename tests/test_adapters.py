@@ -23,9 +23,9 @@ from brainvault.adapters import (
 from brainvault.adapters.claude_code import (
     ENGRAM_END_MARKER,
     ENGRAM_MARKER,
-    INSTRUCTIONS_BODY,
     SettingsJsonError,
 )
+from brainvault.adapters.cursor import _cursor_managed_body
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -130,7 +130,7 @@ class TestClaudeCodeAdapter:
 
     def test_register_mcp_adds_entry(self, claude_paths):
         adapter = ClaudeCodeAdapter()
-        assert adapter.register_mcp() is True
+        assert adapter.register_mcp() == "registered"
         data = json.loads(claude_paths["settings"].read_text())
         assert "brainvault" in data["mcpServers"]
         assert data["mcpServers"]["brainvault"]["env"]["BRAINVAULT_SOURCE_AGENT"] == "claude_code"
@@ -138,7 +138,81 @@ class TestClaudeCodeAdapter:
     def test_register_mcp_is_idempotent(self, claude_paths):
         adapter = ClaudeCodeAdapter()
         adapter.register_mcp()
-        assert adapter.register_mcp() is False
+        assert adapter.register_mcp() == "skipped"
+
+    def test_register_mcp_updates_stale_entry(self, claude_paths):
+        import sys
+
+        claude_paths["settings"].write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "brainvault": {
+                            "command": "/nonexistent/python",
+                            "args": ["-m", "brainvault.mcp_server"],
+                        }
+                    }
+                }
+            )
+        )
+        adapter = ClaudeCodeAdapter()
+        assert adapter.register_mcp() == "updated"
+        data = json.loads(claude_paths["settings"].read_text())
+        assert data["mcpServers"]["brainvault"]["command"] == sys.executable
+
+    def test_register_mcp_skipped_when_equivalent_symlink(
+        self, claude_paths, tmp_path, monkeypatch
+    ):
+        import sys
+
+        real = tmp_path / "python-real"
+        real.write_text("#!/bin/sh\nexit 0\n")
+        real.chmod(0o755)
+        link = tmp_path / "python-link"
+        link.symlink_to(real)
+        monkeypatch.setattr(sys, "executable", str(real))
+        adapter = ClaudeCodeAdapter()
+        adapter.register_mcp()
+        # Pretend the existing entry was written via the symlinked path
+        data = json.loads(claude_paths["settings"].read_text())
+        data["mcpServers"]["brainvault"]["command"] = str(link)
+        claude_paths["settings"].write_text(json.dumps(data))
+        assert adapter.register_mcp() == "skipped"
+
+    def test_register_mcp_skip_preserves_other_keys(self, claude_paths):
+        claude_paths["settings"].write_text(
+            json.dumps({"mcpServers": {"other": {"command": "x"}}, "theme": "dark"})
+        )
+        adapter = ClaudeCodeAdapter()
+        adapter.register_mcp()
+        assert adapter.register_mcp() == "skipped"
+        data = json.loads(claude_paths["settings"].read_text())
+        assert data["theme"] == "dark"
+        assert "other" in data["mcpServers"]
+        assert "brainvault" in data["mcpServers"]
+
+    def test_configured_mcp_command_returns_path(self, claude_paths):
+        import sys
+
+        adapter = ClaudeCodeAdapter()
+        adapter.register_mcp()
+        assert adapter.configured_mcp_command() == sys.executable
+
+    def test_configured_mcp_command_none_when_missing(self, claude_paths):
+        assert ClaudeCodeAdapter().configured_mcp_command() is None
+
+    def test_health_checks_flags_stale_command(self, claude_paths):
+        adapter = ClaudeCodeAdapter()
+        adapter.register_mcp()
+        adapter.register_hooks()
+        adapter.inject_instructions()
+        data = json.loads(claude_paths["settings"].read_text())
+        data["mcpServers"]["brainvault"]["command"] = "/nonexistent/python"
+        claude_paths["settings"].write_text(json.dumps(data))
+        rows = adapter.health_checks()
+        stale_row = next((r for r in rows if r[0] == "Claude MCP command path exists"), None)
+        assert stale_row is not None
+        assert stale_row[1] is False
 
     def test_register_hooks_adds_both(self, claude_paths):
         adapter = ClaudeCodeAdapter()
@@ -240,7 +314,7 @@ class TestCursorAdapter:
 
     def test_register_mcp_creates_file(self, cursor_paths):
         adapter = CursorAdapter()
-        assert adapter.register_mcp() is True
+        assert adapter.register_mcp() == "registered"
         data = json.loads(cursor_paths["mcp"].read_text())
         assert data["mcpServers"]["brainvault"]["args"] == ["-m", "brainvault.mcp_server"]
         assert data["mcpServers"]["brainvault"]["env"]["BRAINVAULT_SOURCE_AGENT"] == "cursor"
@@ -248,7 +322,37 @@ class TestCursorAdapter:
     def test_register_mcp_is_idempotent(self, cursor_paths):
         adapter = CursorAdapter()
         adapter.register_mcp()
-        assert adapter.register_mcp() is False
+        assert adapter.register_mcp() == "skipped"
+
+    def test_register_mcp_updates_stale_entry(self, cursor_paths):
+        import sys
+
+        cursor_paths["mcp"].write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "brainvault": {
+                            "command": "/nonexistent/python",
+                            "args": ["-m", "brainvault.mcp_server"],
+                        }
+                    }
+                }
+            )
+        )
+        adapter = CursorAdapter()
+        assert adapter.register_mcp() == "updated"
+        data = json.loads(cursor_paths["mcp"].read_text())
+        assert data["mcpServers"]["brainvault"]["command"] == sys.executable
+
+    def test_configured_mcp_command_returns_path(self, cursor_paths):
+        import sys
+
+        adapter = CursorAdapter()
+        adapter.register_mcp()
+        assert adapter.configured_mcp_command() == sys.executable
+
+    def test_configured_mcp_command_none_when_missing(self, cursor_paths):
+        assert CursorAdapter().configured_mcp_command() is None
 
     def test_register_mcp_preserves_unrelated(self, cursor_paths):
         cursor_paths["mcp"].write_text(
@@ -293,7 +397,7 @@ class TestCursorAdapter:
         assert "# user preamble" in text
         assert "# user epilogue" in text
         assert "Old stuff." not in text
-        assert INSTRUCTIONS_BODY.rstrip() in text
+        assert _cursor_managed_body().rstrip() in text
 
     def test_strip_instructions_deletes_file(self, cursor_paths):
         adapter = CursorAdapter()
@@ -504,6 +608,28 @@ class TestCursorAdapter:
         )
         adapter = CursorAdapter()
         assert adapter.extract_project_name(p) == "brainvault"
+
+    def test_cursor_extract_project_name_uol(self, tmp_path):
+        sid = "33333333-3333-3333-3333-333333333333"
+        p = (
+            tmp_path
+            / "projects"
+            / "Users-sumithsb-UoL-Dissertation-ssb49"
+            / "agent-transcripts"
+            / sid
+            / f"{sid}.jsonl"
+        )
+        assert CursorAdapter().extract_project_name(p) == "Dissertation-ssb49"
+
+    def test_decode_workspace_slug(self):
+        from brainvault.adapters.cursor import decode_workspace_slug
+
+        assert decode_workspace_slug("Users-sumithsb-Projects-brainvault") == "brainvault"
+        assert decode_workspace_slug("Users-sumithsb-UoL-Dissertation-ssb49") == "Dissertation-ssb49"
+        assert decode_workspace_slug("Users-sumithsb-Tml-pluto-api") == "pluto-api"
+        assert decode_workspace_slug("Users-sumithsb-Downloads-Apache-Logs") == "Apache-Logs"
+        assert decode_workspace_slug("Users-sumithsb") == "Users-sumithsb"
+        assert decode_workspace_slug("plain-folder") == "plain-folder"
 
     def test_health_checks_after_install(self, cursor_paths):
         adapter = CursorAdapter()

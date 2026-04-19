@@ -13,8 +13,8 @@ Cursor host integration:
 from __future__ import annotations
 
 import json
-import re
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 from brainvault.adapters._redact import redact_sensitive
@@ -26,6 +26,7 @@ from brainvault.adapters.claude_code import (
     SettingsJsonError,
     _load_json_object,
     _mcp_entry,
+    _mcp_entry_equivalent,
     _quoted_exe,
 )
 
@@ -40,6 +41,11 @@ alwaysApply: true
 # Cursor postToolUse matcher: avoid dupes with afterFileEdit / afterShellExecution.
 _POSTTOOL_MATCHER = r"Read|Grep|Task|Delete|MCP:.*"
 
+# Inserted before ENGRAM_END_MARKER so it stays inside the managed block (upgrade-safe).
+_CURSOR_MANAGED_NOTE = """
+**Cursor host:** Brainvault MCP tools (`get_my_context`, `search_memory`, …) only run when this session **can call MCP** (e.g. **Agent** / tool-using agent — UI labels vary by Cursor version). Plain chat with tools disabled cannot invoke MCP even if rules load. Confirm **brainvault** is enabled for this chat in MCP settings. For **old** Cursor transcripts on disk, run `brainvault bootstrap --host cursor` once — the Stop hook only picks **recent** JSONL by modification time.
+"""
+
 _CURSOR_HOOK_EVENTS: tuple[tuple[str, str, str | None], ...] = (
     ("stop", "brainvault.capture", None),
     ("postToolUse", "brainvault.tool_capture", _POSTTOOL_MATCHER),
@@ -47,9 +53,47 @@ _CURSOR_HOOK_EVENTS: tuple[tuple[str, str, str | None], ...] = (
     ("afterShellExecution", "brainvault.tool_capture", None),
 )
 
-_WORKSPACE_DECODE = re.compile(
-    r"^Users-[^-]+-(?:Projects|Downloads|Desktop)-(.+)$",
-)
+
+def iter_cursor_transcript_paths_under(root: Path) -> Iterator[Path]:
+    """Yield every ``*.jsonl`` under ``root/*/agent-transcripts/*/*.jsonl``, oldest first."""
+    files: list[tuple[float, Path]] = []
+    for jsonl in root.glob("*/agent-transcripts/*/*.jsonl"):
+        try:
+            files.append((jsonl.stat().st_mtime, jsonl))
+        except OSError:
+            continue
+    files.sort()
+    for _, p in files:
+        yield p
+
+
+def _cursor_managed_body() -> str:
+    """Shared instructions plus Cursor-specific paragraph, still inside managed markers."""
+    if ENGRAM_END_MARKER not in INSTRUCTIONS_BODY:
+        return INSTRUCTIONS_BODY
+    return INSTRUCTIONS_BODY.replace(
+        ENGRAM_END_MARKER,
+        _CURSOR_MANAGED_NOTE.strip() + "\n\n" + ENGRAM_END_MARKER,
+        1,
+    )
+
+
+def decode_workspace_slug(slug: str) -> str:
+    """Decode a Cursor ``~/.cursor/projects/<slug>/`` folder name into a project identifier.
+
+    Strips the leading ``Users-<username>-<container>-`` prefix so paths like
+    ``Users-sumithsb-UoL-Dissertation-ssb49`` become ``Dissertation-ssb49``.
+    """
+    slug = slug.strip()
+    if not slug:
+        return "unknown"
+    if not slug.startswith("Users-"):
+        return slug.lstrip("-") or "unknown"
+    parts = slug.split("-")
+    if len(parts) < 4:
+        return slug.lstrip("-") or "unknown"
+    rest = "-".join(parts[3:])
+    return rest or "unknown"
 
 
 def _cursor_hook_command(module: str) -> dict:
@@ -121,15 +165,25 @@ class CursorAdapter(AgentAdapter):
         self.MCP_CONFIG.parent.mkdir(parents=True, exist_ok=True)
         self.MCP_CONFIG.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-    def register_mcp(self) -> bool:
+    def register_mcp(self) -> str:
         data = self._load_mcp_config() if self.MCP_CONFIG.exists() else {}
         data.setdefault("mcpServers", {})
-        if "brainvault" in data["mcpServers"]:
-            self._write_mcp_config(data)
-            return False
-        data["mcpServers"]["brainvault"] = _mcp_entry(source_agent="cursor")
+        canonical = _mcp_entry(source_agent="cursor")
+        existing = data["mcpServers"].get("brainvault")
+        if existing is not None and _mcp_entry_equivalent(existing, canonical):
+            return "skipped"
+        data["mcpServers"]["brainvault"] = canonical
         self._write_mcp_config(data)
-        return True
+        return "registered" if existing is None else "updated"
+
+    def configured_mcp_command(self) -> str | None:
+        if not self.MCP_CONFIG.exists():
+            return None
+        try:
+            data = self._load_mcp_config()
+        except SettingsJsonError:
+            return None
+        return (data.get("mcpServers") or {}).get("brainvault", {}).get("command")
 
     def unregister_mcp(self) -> bool:
         if not self.MCP_CONFIG.exists():
@@ -256,7 +310,7 @@ class CursorAdapter(AgentAdapter):
     # --- rules file (.mdc) ------------------------------------------------
 
     def _rules_body(self) -> str:
-        return _RULES_FRONTMATTER + INSTRUCTIONS_BODY
+        return _RULES_FRONTMATTER + _cursor_managed_body()
 
     def inject_instructions(self) -> str:
         self.RULES_DIR.mkdir(parents=True, exist_ok=True)
@@ -277,7 +331,7 @@ class CursorAdapter(AgentAdapter):
                 end += 1
             before = existing[:start]
             after = existing[end:].lstrip("\n")
-            new_block = INSTRUCTIONS_BODY
+            new_block = _cursor_managed_body()
             separator = "\n\n" if after else ""
             self.RULES_FILE.write_text(before + new_block + separator + after, encoding="utf-8")
             return "upgraded"
@@ -319,15 +373,20 @@ class CursorAdapter(AgentAdapter):
         candidates.sort(reverse=True)
         return [p for _, p in candidates]
 
+    def iter_all_session_files(self) -> Iterator[Path]:
+        """All agent JSONL transcripts under ~/.cursor/projects/, oldest first."""
+        root = self.session_dir()
+        if root is None:
+            yield from ()
+            return
+        yield from iter_cursor_transcript_paths_under(root)
+
     def extract_project_name(self, session_path: Path) -> str:
         try:
             workspace_dir = session_path.parents[2].name
         except IndexError:
             return session_path.parent.name or "unknown"
-        m = _WORKSPACE_DECODE.match(workspace_dir)
-        if m:
-            return m.group(1)
-        return workspace_dir.lstrip("-") or "unknown"
+        return decode_workspace_slug(workspace_dir)
 
     def parse_session_file(self, path: Path) -> list[str]:
         queries: list[str] = []
@@ -443,6 +502,42 @@ class CursorAdapter(AgentAdapter):
                         "mcpServers.brainvault" if mcp_ok else "missing",
                     )
                 )
+
+                if mcp_ok:
+                    import subprocess as _subprocess
+
+                    cmd = (data.get("mcpServers") or {}).get("brainvault", {}).get("command", "")
+                    cmd_exists = bool(cmd) and Path(cmd).is_file()
+                    checks.append(
+                        (
+                            "Cursor MCP command path exists",
+                            cmd_exists,
+                            cmd
+                            if cmd_exists
+                            else f"{cmd or '(empty)'} not found — run 'brainvault install' to repair",
+                        )
+                    )
+                    if cmd_exists:
+                        try:
+                            r = _subprocess.run(
+                                [cmd, "-c", "import brainvault.mcp_server"],
+                                capture_output=True,
+                                text=True,
+                                timeout=15,
+                            )
+                            importable = r.returncode == 0
+                            detail = (
+                                cmd
+                                if importable
+                                else (r.stderr.strip().splitlines() or ["unknown error"])[-1]
+                            )
+                            checks.append(
+                                ("Cursor MCP python can import brainvault", importable, detail)
+                            )
+                        except Exception as exc:
+                            checks.append(
+                                ("Cursor MCP python can import brainvault", False, str(exc))
+                            )
 
         if self.RULES_FILE.exists():
             text = self.RULES_FILE.read_text(encoding="utf-8")

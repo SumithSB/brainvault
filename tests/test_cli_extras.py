@@ -188,9 +188,9 @@ class TestDoctor:
         a.inject_instructions()
 
         monkeypatch.setattr(sys, "argv", ["brainvault", "doctor"])
-        # Doctor's MCP import check shells out with sys.executable which must have brainvault
-        # installed; editable install in CI guarantees it. In unit tests we just ensure
-        # critical checks pass even if the subprocess fails — so we scope assertions.
+        # health_checks() shells out to test the configured MCP command. In an editable
+        # install the configured command IS sys.executable which has brainvault, so the
+        # subprocess check passes. We allow SystemExit but assert the key rows appear.
         try:
             cli_main()
         except SystemExit:
@@ -198,6 +198,7 @@ class TestDoctor:
         out = capsys.readouterr().out
         assert "Database integrity" in out
         assert "Claude MCP server registered" in out
+        assert "Claude MCP command path exists" in out
         assert "Claude Stop hook" in out
         assert "Claude PostToolUse hook" in out
         assert "Claude CLAUDE.md managed block" in out

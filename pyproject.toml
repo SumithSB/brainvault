@@ -4,13 +4,22 @@ build-backend = "hatchling.build"
 
 [project]
 name = "brainvault"
-version = "0.2.5"
-description = "Personal memory layer for Claude Code and Cursor — knows who you are, what you've built, how you think"
+version = "0.2.6"
+description = "Personal memory layer for AI coding agents — MCP vault for Claude Code, Cursor, and the same tools across sessions"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Sumith SB", email = "sumith2620@gmail.com" }]
-keywords = ["claude", "cursor", "mcp", "memory", "ai", "claude-code"]
+keywords = [
+    "mcp",
+    "memory",
+    "ai",
+    "coding-agent",
+    "claude-code",
+    "cursor",
+    "claude",
+    "cursor-ide",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

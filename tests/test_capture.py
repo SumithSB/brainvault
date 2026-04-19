@@ -15,7 +15,11 @@ from brainvault.adapters.claude_code import (
     extract_project_name,
 )
 from brainvault.adapters.cursor import CursorAdapter
-from brainvault.capture import _maybe_backfill_embeddings, process_session
+from brainvault.capture import (
+    _maybe_backfill_embeddings,
+    mine_session_transcript,
+    process_session,
+)
 
 
 def _write_session(path: Path, events: list[dict]) -> None:
@@ -253,6 +257,237 @@ def test_process_session_no_summary_saves_nothing(tmp_path):
     assert saved == 0
 
 
+def test_process_session_recapture_after_transcript_growth(tmp_path, monkeypatch):
+    """Second pass with no growth saves nothing; after append + growth, may save new rows."""
+    import brainvault.capture as cap
+
+    monkeypatch.setattr(cap, "_RECAPTURE_MIN_INTERVAL_SEC", 0)
+
+    p1 = (
+        "The root cause of the failure was a race in the job scheduler. The fix was to "
+        "serialize enqueue with a distributed lock and add idempotency keys. Verified "
+        "with a stress test and zero duplicate deliveries in staging."
+    )
+    p2 = (
+        "We chose SQLite over Postgres for the offline cache because bundle size and "
+        "embedded deployment matter more than concurrent writers; trade-offs include "
+        "weaker concurrency but simpler ops for field devices."
+    )
+    session_file = tmp_path / "-Users-sumithsb-Projects-pluto" / "grow.jsonl"
+    session_file.parent.mkdir(parents=True)
+    _write_session(
+        session_file,
+        [
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": p1}],
+                },
+            },
+        ],
+    )
+    first = process_session(session_file, ClaudeCodeAdapter())
+    assert first >= 1
+    second = process_session(session_file, ClaudeCodeAdapter())
+    assert second == 0
+
+    with open(session_file, "a", encoding="utf-8") as f:
+        f.write(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": p2}],
+                    },
+                }
+            )
+            + "\n"
+        )
+    third = process_session(session_file, ClaudeCodeAdapter())
+    assert third >= 1
+
+
+def test_legacy_session_row_seeds_transcript_stats_without_saving(tmp_path):
+    """Rows without transcript_bytes get stats backfilled with zero new memories."""
+    from brainvault import db
+
+    session_file = tmp_path / "-Users-sumithsb-Projects-seed" / "x.jsonl"
+    session_file.parent.mkdir(parents=True)
+    session_file.write_text("{}\n", encoding="utf-8")
+    sp = str(session_file)
+    with db.get_connection() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO sessions_captured
+            (session_path, captured_at, memory_count, source_agent, transcript_bytes, transcript_lines)
+            VALUES (?, datetime('now'), 0, 'claude_code', NULL, NULL)
+            """,
+            (sp,),
+        )
+    assert process_session(session_file, ClaudeCodeAdapter()) == 0
+    row = db.get_session_capture_row(sp)
+    assert row["transcript_bytes"] is not None
+    assert row["transcript_lines"] is not None
+
+
+def test_mine_session_transcript_claude_decision(tmp_path):
+    body = (
+        "We chose PostgreSQL over MySQL for this service because the team needs "
+        "row-level security and mature JSON operators for the billing pipeline. "
+        "Trade-offs include slightly heavier operational footprint, but "
+        "maintainability wins for a small platform team. This aligns with long-term "
+        "scalability goals as invoice volume grows into the millions of rows."
+    )
+    session_file = tmp_path / "s.jsonl"
+    _write_session(
+        session_file,
+        [
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": body}],
+                },
+            },
+        ],
+    )
+    mined = mine_session_transcript(session_file, "claude_code")
+    assert len(mined) == 1
+    assert mined[0][1] == "decision"
+    assert "PostgreSQL" in mined[0][0]
+    assert mined[0][2] >= 5
+
+
+def test_mine_session_transcript_claude_pattern(tmp_path):
+    body = (
+        "The root cause of the timeout was that httpx reused connections after the "
+        "server sent GOAWAY frames. The fix was to enable http2=False for that legacy "
+        "endpoint and add a five-second read timeout. We reproduced the issue locally "
+        "with a stub server and confirmed zero hangs in a fifty-request soak test."
+    )
+    session_file = tmp_path / "s.jsonl"
+    _write_session(
+        session_file,
+        [
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": body}],
+                },
+            },
+        ],
+    )
+    mined = mine_session_transcript(session_file, "claude_code")
+    assert len(mined) == 1
+    assert mined[0][1] == "pattern"
+    assert "root cause" in mined[0][0].lower()
+    assert mined[0][2] >= 5
+
+
+def test_mine_session_transcript_cursor_shape(tmp_path):
+    body = (
+        "The root cause of the 403 responses was a missing scope on the OAuth client. "
+        "The fix was to add the read:packages scope and redeploy the gateway config. "
+        "We confirmed with curl against staging before rolling to production."
+    )
+    session_file = tmp_path / "c.jsonl"
+    _write_session(
+        session_file,
+        [{"role": "assistant", "message": {"content": [{"type": "text", "text": body}]}}],
+    )
+    mined = mine_session_transcript(session_file, "cursor")
+    assert len(mined) == 1
+    assert mined[0][1] == "pattern"
+
+
+def test_mine_session_transcript_returns_empty_for_low_signal(tmp_path):
+    session_file = tmp_path / "s.jsonl"
+    _write_session(
+        session_file,
+        [
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Sure! Let me know if you need anything else."}],
+                },
+            },
+        ],
+    )
+    assert mine_session_transcript(session_file, "claude_code") == []
+
+
+def test_process_session_saves_mined_when_no_continuation(tmp_path):
+    body = (
+        "The root cause of the flaky test was ordering between async fixtures. "
+        "The fix was to mark the shared client fixture with session scope and move "
+        "database truncation into a single autouse hook. Verified with ten repeated "
+        "full-suite runs with no flakes observed on CI or locally."
+    )
+    session_file = tmp_path / "-Users-sumithsb-Projects-pluto" / "only-assistant.jsonl"
+    session_file.parent.mkdir(parents=True)
+    _write_session(
+        session_file,
+        [
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": body}],
+                },
+            },
+        ],
+    )
+    saved = process_session(session_file, ClaudeCodeAdapter())
+    assert saved == 1
+    rows = db.search_memories("root cause")
+    assert any(r["memory_type"] == "pattern" and r["source"] == "hook" for r in rows)
+
+
+def test_process_session_dedupes_mined_against_continuation_chunk(tmp_path):
+    shared = (
+        "The root cause of the timeout storm was connection churn under load. The fix was to "
+        "cap the pool at fifty connections and enable aggressive idle eviction. We validated "
+        "with a soak test and saw stable latency for eight hours straight."
+    )
+    summary_body = (
+        "The user is building a FastAPI backend. JWT auth was chosen for stateless scaling. "
+        "PostgreSQL is the database. This exceeds the minimum length for a valid summary. "
+        + shared
+        + " Additional context fills out the continuation blob for the parser."
+    )
+    # Exact substring of summary_body (high-signal paragraph) — must not duplicate as pattern.
+    assistant_body = shared
+    session_file = tmp_path / "-Users-sumithsb-Projects-pluto" / "dedupe.jsonl"
+    session_file.parent.mkdir(parents=True)
+    _write_session(
+        session_file,
+        [
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": f"{CONTINUATION_MARKER}\n{summary_body}"}],
+                },
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": assistant_body}],
+                },
+            },
+        ],
+    )
+    saved = process_session(session_file, ClaudeCodeAdapter())
+    pattern_rows = [r for r in db.search_memories("pool") if r["memory_type"] == "pattern"]
+    assert pattern_rows == []
+    assert saved == 1
+
+
 def test_process_session_cursor_user_queries(tmp_path):
     sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     session_file = (
@@ -302,6 +537,8 @@ def test_maybe_run_git_scan_skips_when_latest_commit_already_scanned(monkeypatch
 
 
 def test_maybe_run_git_scan_runs_when_new_commits_exist(monkeypatch, tmp_path):
+    import datetime as dt
+
     import brainvault.capture as cap
     import brainvault.git_scan as gs
 
@@ -316,6 +553,7 @@ def test_maybe_run_git_scan_runs_when_new_commits_exist(monkeypatch, tmp_path):
 
     def fake_scan_repo(repo_path, project, since, limit, verbose):
         scan_called["ran"] = True
+        scan_called["since"] = since
         return {
             "commits_saved": 3,
             "commits_examined": 5,
@@ -328,6 +566,37 @@ def test_maybe_run_git_scan_runs_when_new_commits_exist(monkeypatch, tmp_path):
     result = cap._maybe_run_git_scan()
     assert scan_called.get("ran") is True
     assert result == 3
+    # Regression: `since` must be a datetime so git_scan._get_commits can call
+    # strftime on it. A string used to silently crash the whole scan.
+    assert isinstance(scan_called["since"], dt.datetime)
+
+
+def test_maybe_run_git_scan_end_to_end_does_not_raise(monkeypatch, tmp_path):
+    """
+    End-to-end regression: a string `since` used to reach `_get_commits` and
+    explode on `.strftime`. This exercises the real scan_repo path (no mock)
+    to guarantee the hook never silently fails on type mismatches again.
+    """
+    import brainvault.capture as cap
+    import brainvault.git_scan as gs
+
+    monkeypatch.chdir(tmp_path)
+    new_hash = "newcommithash000000000000000000000000000"
+
+    monkeypatch.setattr(gs, "_resolve_repo_path", lambda p: tmp_path)
+
+    def fake_run_git(args, cwd):
+        # Latest-hash probe (from _maybe_run_git_scan) and any _run_git from
+        # within scan_repo both return harmless values.
+        if args[:2] == ["log", "-1"]:
+            return new_hash
+        return ""
+
+    monkeypatch.setattr(gs, "_run_git", fake_run_git)
+
+    # Must not raise — previously threw AttributeError on str.strftime
+    result = cap._maybe_run_git_scan()
+    assert result == 0
 
 
 def test_maybe_run_git_scan_swallows_errors(monkeypatch, tmp_path):

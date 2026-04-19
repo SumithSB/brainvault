@@ -9,6 +9,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-04-19
+
+### Added
+
+- **Bulk project delete** — `brainvault forget --project <name>` deletes all memories for a project in one command. MCP `forget` tool gains an optional `project` parameter for the same from within Claude. FTS5, vector, and link rows cleaned up automatically via existing triggers/CASCADE.
+
+### Improved
+
+- **Auto-capture quality** — Mining score threshold lowered (5 → 3) and per-session cap raised (10 → 20), so more decision and pattern memories are extracted from session transcripts automatically. Eight new signal rules added (e.g. "discovered that", "the reason is", "opted for", "traceback", "going with").
+- **Proactive capture instructions** — Cadence rule in `CLAUDE.md` / `brainvault.mdc` upgraded from a soft guideline to an explicit hard rule with concrete trigger conditions and examples, improving Claude's in-session save behaviour.
+
+### Docs
+
+- **README** — Added "How it works in practice" section with three concrete usage examples (session start, bug recall, new project kickoff).
+- **README** — Added "When does it get good?" progression table setting honest expectations at day 1, one week, and one month.
+- **README** — Added "Host support" section positioning Claude Code as the primary experience and documenting Cursor's limitations (Agent mode only, model compliance, rules vs system prompt).
+
 ## [0.2.5] - 2026-04-18
 
 ### Changed
