@@ -5,6 +5,7 @@ Database lives at ~/.brainvault/memory.db
 
 import hashlib
 import json
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -1196,8 +1197,6 @@ def _extract_keywords(text: str) -> list[str]:
         "go",
         "like",
     }
-    import re
-
     words = re.findall(r"[a-zA-Z][a-zA-Z0-9_\-]*", text.lower())
     freq: dict[str, int] = {}
     for w in words:
@@ -1338,8 +1337,6 @@ def get_code_context_data(
           "query": str,
         }
     """
-    import re as _re
-
     memories = _search_fts(query, project=project, limit=limit * 3)
     _update_access_stats(memories)
 
@@ -1347,7 +1344,7 @@ def get_code_context_data(
     git_files: list[str] = []
     for m in memories:
         if m.get("source") == "git":
-            match = _re.search(r"Files:\s*(.+)", m.get("content", ""))
+            match = re.search(r"Files:\s*(.+)", m.get("content", ""))
             if match:
                 git_files.extend(f.strip() for f in match.group(1).split(",") if f.strip())
 

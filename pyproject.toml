@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "brainvault"
-version = "0.1.0"
+version = "0.1.1"
 description = "Personal memory layer for AI coding agents — MCP vault for Claude Code, Cursor, and the same tools across sessions"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
