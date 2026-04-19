@@ -9,6 +9,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-04-19
+
+### Fixed
+
+- **`db.py`** — `re` moved to top-level imports; removed two inline `import re` calls inside functions.
+- **`mcp_server.py`** — Fixed 7 `str = None` → `str | None = None` type annotations so FastMCP generates correct JSON schemas for optional parameters.
+
 ## [0.1.0] - 2026-04-19
 
 ### Added

@@ -164,7 +164,7 @@ def get_my_context() -> str:
 
 @mcp.tool()
 def search_memory(
-    query: str, project: str = None, max_chars: int = _DEFAULT_SEARCH_MEMORY_MAX_CHARS
+    query: str, project: str | None = None, max_chars: int = _DEFAULT_SEARCH_MEMORY_MAX_CHARS
 ) -> str:
     """
     Search your memory for context relevant to a query.
@@ -240,7 +240,7 @@ def search_memory(
 def save_memory(
     content: str,
     memory_type: str,
-    project: str = None,
+    project: str | None = None,
     keywords: list[str] = None,
 ) -> str:
     """
@@ -391,7 +391,7 @@ def get_project(name: str, limit: int = 20) -> str:
 
 
 @mcp.tool()
-def record_outcome(memory_id: str, outcome: str, sentiment: str = None) -> str:
+def record_outcome(memory_id: str, outcome: str, sentiment: str | None = None) -> str:
     """
     Record the real-world outcome of a past decision.
 
@@ -601,9 +601,9 @@ def get_code_context(
 @mcp.tool()
 def update_memory(
     memory_id: str,
-    content: str = None,
-    memory_type: str = None,
-    project: str = None,
+    content: str | None = None,
+    memory_type: str | None = None,
+    project: str | None = None,
 ) -> str:
     """
     Edit an existing memory in place.
@@ -650,7 +650,7 @@ def update_memory(
 
 
 @mcp.tool()
-def forget(memory_id: str = None, project: str = None) -> str:
+def forget(memory_id: str | None = None, project: str | None = None) -> str:
     """
     Delete a specific memory by ID, or all memories for a project.
 
@@ -687,7 +687,7 @@ def forget(memory_id: str = None, project: str = None) -> str:
 
 @mcp.tool()
 def get_recent_activity(
-    project: str = None,
+    project: str | None = None,
     days: int = 7,
 ) -> str:
     """
