@@ -22,6 +22,7 @@ from brainvault.git_scan import (
     _get_commit_stats,
     _get_commits,
     _is_significant,
+    _refine_memory_type_from_body,
     _resolve_repo_path,
     _run_git,
     scan_repo,
@@ -297,6 +298,24 @@ def test_classify_keyword_not_first_word():
     assert _classify_memory_type(_make_commit("initial implement approach")) == "pattern"
 
 
+def test_refine_body_root_cause_becomes_pattern():
+    c = _make_commit("docs: update readme")
+    body = (
+        "Root cause: stale cache. The fix was to invalidate keys on write. "
+        "This was caught in staging only after load tests."
+    )
+    assert _refine_memory_type_from_body(c, body, "note") == "pattern"
+
+
+def test_refine_body_tradeoff_upgrades_note_to_decision():
+    c = _make_commit("chore: tweak")
+    body = (
+        "Trade-off: we chose Redis because latency targets require sub-ms reads "
+        "and the team already operates Redis in production for other services."
+    )
+    assert _refine_memory_type_from_body(c, body, "note") == "decision"
+
+
 # ---------------------------------------------------------------------------
 # _format_memory_content
 # ---------------------------------------------------------------------------
@@ -326,6 +345,17 @@ def test_format_memory_content_omits_files_line_when_empty():
     stats = CommitStats(files_changed=1, additions=3, deletions=1, top_files=[])
     content = _format_memory_content(c, stats)
     assert "Files:" not in content
+
+
+def test_format_memory_content_includes_body_when_provided():
+    c = _make_commit("fix bug")
+    c["date"] = "2024-01-15T10:00:00+00:00"
+    c["short_hash"] = "abc12345"
+    stats = CommitStats(files_changed=1, additions=3, deletions=1, top_files=[])
+    body = "Root cause: null deref. The fix was a guard clause."
+    content = _format_memory_content(c, stats, body=body)
+    assert "Message body:" in content
+    assert "Root cause" in content
 
 
 # ---------------------------------------------------------------------------

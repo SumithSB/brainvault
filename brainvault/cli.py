@@ -2,8 +2,8 @@
 brainvault/cli.py — Command-line interface for brainvault.
 
 Commands:
-    brainvault install    — set up MCP server + Stop hook in Claude Code
-    brainvault bootstrap  — seed memory from existing Claude Code session history
+    brainvault install    — register MCP + hooks on detected agents (e.g. Claude Code, Cursor)
+    brainvault bootstrap  — bulk-import session transcripts (Claude Code + Cursor)
     brainvault search     — search stored memories
     brainvault stats      — show memory statistics
 """
@@ -18,6 +18,16 @@ def main() -> None:
         sys.exit(1)
 
     cmd = sys.argv[1]
+
+    if cmd in ("--help", "-h", "help"):
+        _print_usage()
+        return
+
+    if cmd in ("--version", "-V", "version"):
+        from brainvault import __version__
+
+        print(f"brainvault {__version__}")
+        return
 
     if cmd == "install":
         _cmd_install()
@@ -65,9 +75,7 @@ def main() -> None:
         _cmd_bootstrap_git()
 
     elif cmd == "bootstrap":
-        from brainvault.bootstrap import run as bootstrap_run
-
-        bootstrap_run()
+        _cmd_bootstrap()
 
     elif cmd == "search":
         _cmd_search()
@@ -92,7 +100,7 @@ def _print_usage() -> None:
     print()
     print("Commands:")
     print("  install    Detect coding agents, checklist (TTY) or typed selection, then MCP + hooks")
-    print("  uninstall  Remove hooks + MCP entry from Claude Code (--purge also deletes DB)")
+    print("  uninstall  Remove hooks + MCP from configured agent hosts (--purge also deletes DB)")
     print("  doctor     Diagnose install health: hooks, MCP, DB, optional deps")
     print("  export     Export memories + projects as JSON or Markdown")
     print("  import     Import a previously-exported JSON vault (merge by default)")
@@ -101,16 +109,46 @@ def _print_usage() -> None:
     print("  git-scan      Mine git history for architectural decision memories")
     print("  bootstrap-git Discover and scan all local git repos under a path")
     print("  index-repo    Index file structure and co-change matrix for a repo")
-    print("  bootstrap  Seed memory from existing Claude Code session history")
+    print("  bootstrap  Import session transcripts (Claude + Cursor); --host claude_code|cursor|all")
     print("  search     Search stored memories")
     print("  status     Show vault health at a glance")
     print("  update     Edit an existing memory by ID")
     print("  graph      Generate HTML brain graph of all memories")
     print("  reflect    Surface cross-project patterns and open decisions")
-    print("  forget     Delete a memory by ID")
+    print("  forget     Delete a memory by ID, or all memories for a project (--project <name>)")
     print("  stats      Show memory statistics")
-    print("  sessions   List recent agent sessions and their activity (Claude Code + Cursor)")
+    print("  sessions   List recent agent sessions and activity (tagged by host)")
     print("  activity   Show full event timeline for a specific session")
+
+
+def _parse_bootstrap_host_flag(argv: list[str]) -> frozenset[str] | None:
+    """Parse ``--host`` for ``brainvault bootstrap``.
+
+    Returns ``None`` when absent or ``all`` (import from every available host).
+    """
+    host: str | None = None
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--host" and i + 1 < len(argv):
+            host = argv[i + 1].strip().lower()
+            i += 2
+        else:
+            i += 1
+    if host is None or host == "all":
+        return None
+    if host == "claude_code":
+        return frozenset({"claude_code"})
+    if host == "cursor":
+        return frozenset({"cursor"})
+    print(f"Unknown --host {host!r}. Use: claude_code, cursor, or all.")
+    sys.exit(1)
+
+
+def _cmd_bootstrap() -> None:
+    from brainvault.bootstrap import run as bootstrap_run
+
+    hosts = _parse_bootstrap_host_flag(sys.argv[2:])
+    bootstrap_run(hosts=hosts)
 
 
 def _parse_agents_flag(args: list[str]) -> list[str] | None:
@@ -225,7 +263,7 @@ def _pick_agents_interactive(skip_prompt: bool = False) -> list[str] | None:
     if not detected:
         print("  No supported coding agents detected on this machine.")
         print("  Supported: " + ", ".join(cls.display_name for cls in ALL_ADAPTERS))
-        print("\n  Install Claude Code or Cursor first, then re-run `brainvault install`.")
+        print("\n  Install a supported coding agent first (e.g. Claude Code or Cursor), then re-run `brainvault install`.")
         return []
 
     if len(detected) == 1 or skip_prompt:
@@ -307,9 +345,6 @@ def _cmd_doctor() -> None:
     """
     import shutil
     import sqlite3
-    import subprocess
-    import sys as _sys
-    from pathlib import Path
 
     from brainvault import db
     from brainvault.adapters import all_adapters
@@ -355,29 +390,10 @@ def _cmd_doctor() -> None:
         check(
             "Coding agent detected",
             False,
-            "no supported agent (Claude Code / Cursor) found — install one and re-run",
+            "no supported coding agent found — install Claude Code, Cursor, or another supported host and re-run",
         )
 
-    # 3. MCP module importable in the current interpreter
-    exe_to_test = _sys.executable
-    if Path(exe_to_test).is_file():
-        try:
-            r = subprocess.run(
-                [exe_to_test, "-c", "import brainvault.mcp_server"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            if r.returncode == 0:
-                check("brainvault.mcp_server importable", True, exe_to_test)
-            else:
-                check(
-                    "brainvault.mcp_server importable",
-                    False,
-                    (r.stderr.strip().splitlines() or [""])[-1],
-                )
-        except Exception as e:
-            check("brainvault.mcp_server importable", False, str(e))
+    # 3. (MCP command path + importability probed per-adapter inside health_checks above)
 
     # 4. Optional semantic stack
     try:
@@ -730,13 +746,13 @@ def _cmd_init() -> None:
     """Structured onboarding for a new project."""
     print("Brainvault project init\n")
 
-    name = input("Project name (short identifier, e.g. 'pluto-api'): ").strip()
+    name = input("Project name (short identifier, e.g. 'my-service'): ").strip()
     if not name:
         print("Project name cannot be empty.")
         return
 
     description = input("What does it do? (1-2 sentences): ").strip()
-    stack_raw = input("Tech stack (comma-separated, e.g. 'FastAPI, PostgreSQL, Redis'): ").strip()
+    stack_raw = input("Tech stack (comma-separated, e.g. 'Rust, gRPC, Postgres'): ").strip()
     stack = [s.strip() for s in stack_raw.split(",") if s.strip()]
 
     print("\nOptional — press Enter to skip:")
@@ -1301,23 +1317,36 @@ def _cmd_reflect() -> None:
 
 
 def _cmd_forget() -> None:
-    """Delete a memory by ID."""
+    """Delete a memory by ID, or all memories for a project."""
     args = sys.argv[2:]
     if not args:
         print("Usage: brainvault forget <id>")
+        print("       brainvault forget --project <name>")
         sys.exit(1)
-
-    memory_id = args[0]
 
     from brainvault import db
 
     db.init_db()
-    deleted = db.delete_memory(memory_id)
-    if deleted:
-        print(f"Memory {memory_id} deleted.")
+
+    if args[0] == "--project":
+        if len(args) < 2:
+            print("Error: --project requires a project name.")
+            sys.exit(1)
+        project_name = args[1]
+        count = db.delete_project_memories(project_name)
+        if count:
+            print(f"Deleted {count} memories for project '{project_name}'.")
+        else:
+            print(f"No memories found for project '{project_name}'.")
+            sys.exit(1)
     else:
-        print(f"Memory {memory_id} not found.")
-        sys.exit(1)
+        memory_id = args[0]
+        deleted = db.delete_memory(memory_id)
+        if deleted:
+            print(f"Memory {memory_id} deleted.")
+        else:
+            print(f"Memory {memory_id} not found.")
+            sys.exit(1)
 
 
 def _cmd_search() -> None:

@@ -7,7 +7,7 @@ Thanks for your interest in contributing.
 ## Development setup
 
 ```bash
-git clone https://github.com/SumithSB/brainvault
+git clone https://github.com/<user-or-org>/brainvault.git
 cd brainvault
 pip install -e ".[dev]"
 ```
@@ -22,7 +22,7 @@ python -m twine check dist/*
 
 Fix any `twine check` warnings before pushing a release tag.
 
-The **sdist** tarball intentionally omits `/.claude` and `/uv.lock` (see `pyproject.toml` → `[tool.hatch.build.targets.sdist]`) so local Claude config and the dev lockfile are never published; the **wheel** contains only the `brainvault` package plus `LICENSE` metadata.
+The **sdist** tarball intentionally omits `/.claude` and `/uv.lock` (see `pyproject.toml` → `[tool.hatch.build.targets.sdist]`) so local agent config and the dev lockfile are never published; the **wheel** contains only the `brainvault` package plus `LICENSE` metadata.
 
 ---
 
@@ -58,7 +58,7 @@ brainvault/
 ├── capture.py      — Stop hook handler; extracts continuation summaries from JSONL session files
 ├── tool_capture.py — PostToolUse hook handler; records Write/Edit/Bash/TodoWrite/NotebookEdit
 │                     events into session_events table; <20 ms per event, never crashes
-├── bootstrap.py    — Imports past Claude Code session history into the vault
+├── bootstrap.py    — Bulk-import session JSONL (Claude ~/.claude/projects + Cursor transcripts)
 ├── installer.py    — Dispatches install / uninstall over every detected adapter;
 │                     auto-seeds vault on install
 ├── adapters/       — One concrete adapter per host: AgentAdapter ABC in base.py,
@@ -104,13 +104,13 @@ tests/
 1. Add the function `_cmd_<name>()` in `cli.py`
 2. Add the dispatch branch in `main()`
 3. Add the usage line in `_print_usage()`
-4. Update `CLAUDE.md` CLI commands section and `README.md` commands table
+4. Update `CLAUDE.md` CLI commands section; keep `README.md` in sync only if the user-facing workflow changes (README is intentionally short)
 
 ## Adding a new MCP tool
 
 1. Decorate with `@mcp.tool()` in `mcp_server.py`
 2. Validate `memory_type` against `db.VALID_MEMORY_TYPES` if applicable
-3. Update the MCP tools table in `README.md` and `CLAUDE.md`
+3. Update the MCP tools table in `CLAUDE.md` (canonical); mention in `README.md` only if behaviour visible to end users changes
 
 ## Adding a DB schema change
 
@@ -139,7 +139,7 @@ Releases are built and uploaded by [`.github/workflows/publish.yml`](.github/wor
 1. Create the **`brainvault`** project on [PyPI](https://pypi.org/) (or claim the name if unused).
 2. In PyPI → **Your project** → **Publishing** → **Add a new pending publisher** (trusted publishing):
    - **PyPI Project Name:** `brainvault`
-   - **Owner:** `SumithSB` (GitHub org or user that owns the repo)
+   - **Owner:** your GitHub user or org that owns the repository
    - **Repository name:** `brainvault`
    - **Workflow name:** `publish.yml`
    - **Environment name:** leave **empty** unless you intentionally restrict uploads to a [GitHub Environment](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment); if you set one on PyPI, add a matching `environment:` block to the **publish** job in `publish.yml`.

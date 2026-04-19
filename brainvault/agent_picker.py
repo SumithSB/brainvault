@@ -127,12 +127,14 @@ def _read_byte_unix() -> int:
         c0 = b[0]
         if c0 != KEY_ESC:
             return c0
-        # Arrow keys: ESC [ A / ESC [ B
+        # Arrow keys: ESC [ A / ESC [ B. `buffer.read(1)` returns bytes, not int,
+        # so compare against byte literals — comparing bytes to `ord(...)` (int)
+        # is always False and silently breaks arrow navigation.
         b2 = sys.stdin.buffer.read(1)
         b3 = sys.stdin.buffer.read(1)
-        if b2 == ord("[") and b3 == ord("A"):
+        if b2 == b"[" and b3 == b"A":
             return KEY_UP
-        if b2 == ord("[") and b3 == ord("B"):
+        if b2 == b"[" and b3 == b"B":
             return KEY_DOWN
         return c0
     finally:

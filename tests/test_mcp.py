@@ -12,6 +12,7 @@ from brainvault.mcp_server import (
     register_project,
     save_memory,
     search_memory,
+    update_memory,
 )
 
 
@@ -185,3 +186,57 @@ def test_forget_memory():
 def test_forget_nonexistent_memory():
     result = forget("nonexistent-id-abc")
     assert "not found" in result
+
+
+def test_forget_project():
+    save_memory("decision A", "decision", project="mcp_bulk_test")
+    save_memory("pattern B", "pattern", project="mcp_bulk_test")
+
+    result = forget(project="mcp_bulk_test")
+    assert "2" in result
+    assert "mcp_bulk_test" in result
+
+    search_result = search_memory("mcp_bulk_test")
+    assert "No relevant memory found" in search_result
+
+
+def test_forget_project_not_found():
+    result = forget(project="nonexistent_project_xyz")
+    assert "No memories found" in result
+
+
+def test_forget_both_args_error():
+    result = forget(memory_id="some-id", project="some-project")
+    assert "Error" in result
+
+
+def test_forget_no_args_error():
+    result = forget()
+    assert "Error" in result
+
+
+def test_terse_save_and_search_memory(monkeypatch):
+    monkeypatch.setenv("BRAINVAULT_MCP_TERSE", "1")
+    save_r = save_memory("Terse JWT note", "note", project="tp")
+    assert save_r.startswith("ok ")
+    assert "note" in save_r
+    assert "p=tp" in save_r
+
+    search_r = search_memory("Terse JWT")
+    assert search_r.startswith("n=")
+    assert "|note|" in search_r
+    assert "Terse JWT" in search_r
+
+
+def test_terse_update_memory_noop(monkeypatch):
+    monkeypatch.setenv("BRAINVAULT_MCP_TERSE", "1")
+    save_r = save_memory("x", "note")
+    mid = save_r.split()[1]
+    noop = update_memory(memory_id=mid)
+    assert noop == "upd noop"
+
+
+def test_terse_empty_timeline(monkeypatch):
+    monkeypatch.setenv("BRAINVAULT_MCP_TERSE", "1")
+    r = get_session_timeline("no-such-session-xyz")
+    assert r.startswith("tl - ")

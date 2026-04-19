@@ -11,6 +11,7 @@ All subprocess calls use args lists (never shell=True) to prevent injection.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -108,6 +109,14 @@ NOISE_PATTERNS = frozenset(
     }
 )
 
+# Conservative body/signal refinement (full message = subject + body)
+_BODY_PATTERN_SIGNAL = re.compile(
+    r"(?is)\b(root cause|regression\b|workaround|the fix was|fixed by|resolved by|caused by)\b"
+)
+_BODY_DECISION_SIGNAL = re.compile(
+    r"(?is)\b(trade-?offs?\b|rationale\b|because\b|chosen\b|instead of|rather than|design decision)\b"
+)
+
 # Maps commit subject keywords to memory_type
 MEMORY_TYPE_MAP: dict[str, str] = {
     "refactor": "decision",
@@ -179,14 +188,24 @@ def _resolve_repo_path(path: str | Path) -> Path:
     return p.resolve()
 
 
-def _get_commits(repo_path: Path, since: datetime, limit: int) -> list[CommitInfo]:
+def _coerce_since(since: str | datetime) -> datetime:
+    """
+    Accept either an ISO-8601 string or a datetime, return a datetime.
+    Tolerating both keeps hook-side callers safe against regressions.
+    """
+    if isinstance(since, datetime):
+        return since
+    return datetime.fromisoformat(since)
+
+
+def _get_commits(repo_path: Path, since: str | datetime, limit: int) -> list[CommitInfo]:
     """
     Return commits from git log, newest first, within the given date range.
 
     Uses ASCII Unit Separator (\\x1f) as field delimiter — safe against any
     characters that might appear in commit messages, author names, or dates.
     """
-    since_iso = since.strftime("%Y-%m-%dT%H:%M:%S")
+    since_iso = _coerce_since(since).strftime("%Y-%m-%dT%H:%M:%S")
     fmt = _SEP.join(["%H", "%s", "%an <%ae>", "%aI", "%P"])
     output = _run_git(
         ["log", f"--format={fmt}", f"--since={since_iso}", f"--max-count={limit}"],
@@ -212,6 +231,12 @@ def _get_commits(repo_path: Path, since: datetime, limit: int) -> list[CommitInf
             )
         )
     return commits
+
+
+def _get_commit_body(repo_path: Path, commit_hash: str) -> str:
+    """Return full commit message body (excluding subject), or empty string."""
+    out = _run_git(["show", "-s", "--format=%B", commit_hash], cwd=repo_path)
+    return (out or "").strip()
 
 
 def _get_commit_stats(repo_path: Path, commit_hash: str) -> CommitStats:
@@ -312,7 +337,23 @@ def _classify_memory_type(commit: CommitInfo) -> str:
     return "note"
 
 
-def _format_memory_content(commit: CommitInfo, stats: CommitStats) -> str:
+def _refine_memory_type_from_body(commit: CommitInfo, body: str, preliminary: str) -> str:
+    """
+    Refine memory_type using subject + body heuristics (conservative).
+    Prefer pattern/fix language over generic subjects; upgrade note -> decision when rationale appears.
+    """
+    subject = commit["message"].strip()
+    combined = f"{subject}\n{body}".strip()
+    if len(combined) < 40:
+        return preliminary
+    if _BODY_PATTERN_SIGNAL.search(combined):
+        return "pattern"
+    if _BODY_DECISION_SIGNAL.search(combined) and preliminary == "note":
+        return "decision"
+    return preliminary
+
+
+def _format_memory_content(commit: CommitInfo, stats: CommitStats, body: str = "") -> str:
     """Produce the rich memory string stored in the DB."""
     lines = [
         f"[git] {commit['short_hash']}: {commit['message']}",
@@ -322,13 +363,19 @@ def _format_memory_content(commit: CommitInfo, stats: CommitStats) -> str:
     ]
     if stats["top_files"]:
         lines.append(f"Files: {', '.join(stats['top_files'][:5])}")
+    if body:
+        snippet = body.strip()
+        if len(snippet) > 1200:
+            snippet = snippet[:1197] + "..."
+        lines.append("")
+        lines.append(f"Message body:\n{snippet}")
     return "\n".join(lines)
 
 
 def scan_repo(
     repo_path: Path,
     project: str,
-    since: datetime,
+    since: str | datetime,
     limit: int,
     verbose: bool = True,
 ) -> dict:
@@ -364,8 +411,11 @@ def scan_repo(
             db.mark_commit_scanned(repo_key, commit["hash"])
             continue
 
-        memory_type = _classify_memory_type(commit)
-        content = _format_memory_content(commit, stats)
+        body = _get_commit_body(resolved, commit["hash"])
+        memory_type = _refine_memory_type_from_body(
+            commit, body, _classify_memory_type(commit)
+        )
+        content = _format_memory_content(commit, stats, body=body)
         db.save_memory(
             content, memory_type, project=project, source="git", source_agent=db.SYSTEM_SOURCE_AGENT
         )

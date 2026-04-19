@@ -67,6 +67,23 @@ def test_delete_nonexistent_memory():
     assert deleted is False
 
 
+def test_delete_project_memories():
+    db.save_memory("decision A", "decision", project="proj_bulk_test")
+    db.save_memory("pattern B", "pattern", project="proj_bulk_test")
+    db.save_memory("note C", "note", project="proj_bulk_test")
+
+    count = db.delete_project_memories("proj_bulk_test")
+    assert count == 3
+
+    results = db.search_memories("proj_bulk_test")
+    assert results == []
+
+
+def test_delete_project_memories_no_match():
+    count = db.delete_project_memories("nonexistent_project_xyz")
+    assert count == 0
+
+
 def test_save_project_and_retrieve():
     db.save_project(
         name="pluto",
@@ -224,3 +241,19 @@ def test_fts5_fallback_to_like_on_operational_error(monkeypatch):
     results = db_module._search_fts("JWT", project=None, limit=5)
     assert len(results) >= 1
     assert any("JWT" in r["content"] for r in results)
+
+
+def test_hook_capture_duplicate_uses_content_fingerprint():
+    db.save_memory(
+        "duplicate hook capture text",
+        "note",
+        project="p1",
+        source="hook",
+        source_agent="claude_code",
+    )
+    assert db.is_hook_capture_duplicate(
+        "duplicate hook capture text", "p1", source="hook", source_agent="claude_code"
+    )
+    assert not db.is_hook_capture_duplicate(
+        "unique other text", "p1", source="hook", source_agent="claude_code"
+    )

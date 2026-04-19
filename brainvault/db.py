@@ -3,6 +3,7 @@ brainvault/db.py — SQLite storage layer with FTS5 full-text search.
 Database lives at ~/.brainvault/memory.db
 """
 
+import hashlib
 import json
 import sqlite3
 import uuid
@@ -242,8 +243,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX idx_memories_project_created ON memories(project, created_at)")
 
     # source_agent column — which coding-agent host produced the row.
-    # Default 'claude_code' backfills pre-existing rows (only Claude was
-    # supported before the adapter refactor). Multi-agent installs tag each
+    # Default 'claude_code' backfills pre-existing rows from before multi-agent
+    # tagging. New rows set source_agent from the connecting host. Multi-agent installs tag each
     # new row at the capture/save site.
     for table in ("memories", "session_events", "sessions_captured"):
         cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -251,6 +252,51 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(
                 f"ALTER TABLE {table} ADD COLUMN source_agent TEXT NOT NULL DEFAULT 'claude_code'"
             )
+
+    existing_mem_cols3 = {row[1] for row in conn.execute("PRAGMA table_info(memories)").fetchall()}
+    if "content_hash" not in existing_mem_cols3:
+        conn.execute("ALTER TABLE memories ADD COLUMN content_hash TEXT")
+
+    existing_idx = {
+        row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
+    }
+    if "idx_memories_content_hash" not in existing_idx:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_content_hash ON memories(content_hash)"
+        )
+
+    sess_cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions_captured)").fetchall()}
+    if "transcript_bytes" not in sess_cols:
+        conn.execute("ALTER TABLE sessions_captured ADD COLUMN transcript_bytes INTEGER")
+    if "transcript_lines" not in sess_cols:
+        conn.execute("ALTER TABLE sessions_captured ADD COLUMN transcript_lines INTEGER")
+
+
+def memory_content_fingerprint(content: str) -> str:
+    """Stable SHA-256 hex digest for deduplicating hook/git auto-captured memories."""
+    norm = " ".join(content.split())
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()
+
+
+def is_hook_capture_duplicate(
+    content: str,
+    project: str | None,
+    *,
+    source: str = "hook",
+    source_agent: str = "claude_code",
+) -> bool:
+    """True if the same or equivalent hook memory was already stored."""
+    fp = memory_content_fingerprint(content)
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT 1 FROM memories
+            WHERE source = ? AND source_agent = ?
+              AND (content_hash = ? OR (content_hash IS NULL AND content = ? AND IFNULL(project, '') = IFNULL(?, '')))
+            """,
+            (source, source_agent, fp, content, project),
+        ).fetchone()
+        return row is not None
 
 
 def save_memory(
@@ -260,6 +306,8 @@ def save_memory(
     keywords: list[str] | None = None,
     source: str = "explicit",
     source_agent: str = "claude_code",
+    *,
+    content_hash: str | None = None,
 ) -> str:
     if source_agent not in VALID_SOURCE_AGENTS:
         raise ValueError(
@@ -267,13 +315,16 @@ def save_memory(
         )
     memory_id = str(uuid.uuid4())
     keywords_json = json.dumps(keywords or _extract_keywords(content))
+    ch = content_hash
+    if ch is None and source in ("hook", "git"):
+        ch = memory_content_fingerprint(content)
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO memories (id, content, memory_type, project, keywords, source, source_agent)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO memories (id, content, memory_type, project, keywords, source, source_agent, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (memory_id, content, memory_type, project, keywords_json, source, source_agent),
+            (memory_id, content, memory_type, project, keywords_json, source, source_agent, ch),
         )
         if project:
             conn.execute(
@@ -551,6 +602,14 @@ def delete_memory(memory_id: str) -> bool:
         return cursor.rowcount > 0
 
 
+def delete_project_memories(project_name: str) -> int:
+    """Delete all memories for a project. Returns count deleted.
+    FTS5, memory_vectors, and memory_links are cleaned up via triggers/CASCADE."""
+    with get_connection() as conn:
+        cursor = conn.execute("DELETE FROM memories WHERE project = ?", (project_name,))
+        return cursor.rowcount
+
+
 def get_stats() -> dict:
     with get_connection() as conn:
         total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
@@ -671,13 +730,17 @@ def update_memory(
             else json.loads(current["keywords"] or "[]")
         )
 
+        new_hash = current.get("content_hash")
+        if content is not None and current.get("source") in ("hook", "git"):
+            new_hash = memory_content_fingerprint(new_content)
+
         cur = conn.execute(
             """
             UPDATE memories
-            SET content = ?, memory_type = ?, project = ?, keywords = ?
+            SET content = ?, memory_type = ?, project = ?, keywords = ?, content_hash = ?
             WHERE id = ?
             """,
-            (new_content, new_type, new_project, new_keywords, memory_id),
+            (new_content, new_type, new_project, new_keywords, new_hash, memory_id),
         )
         if cur.rowcount == 0:
             return False
@@ -703,8 +766,41 @@ def is_session_captured(session_path: str) -> bool:
         return row is not None
 
 
+def get_session_capture_row(session_path: str) -> sqlite3.Row | None:
+    """Return the sessions_captured row for this transcript path, or None."""
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT session_path, captured_at, memory_count, source_agent, transcript_bytes, transcript_lines
+            FROM sessions_captured
+            WHERE session_path = ?
+            """,
+            (session_path,),
+        ).fetchone()
+
+
+def seed_session_transcript_stats(
+    session_path: str, transcript_bytes: int, transcript_lines: int
+) -> None:
+    """Backfill transcript size/line stats for legacy rows (no duplicate memories)."""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE sessions_captured
+            SET transcript_bytes = ?, transcript_lines = ?
+            WHERE session_path = ?
+            """,
+            (transcript_bytes, transcript_lines, session_path),
+        )
+
+
 def mark_session_captured(
-    session_path: str, memory_count: int, source_agent: str = "claude_code"
+    session_path: str,
+    memory_count: int,
+    source_agent: str = "claude_code",
+    *,
+    transcript_bytes: int | None = None,
+    transcript_lines: int | None = None,
 ) -> None:
     if source_agent not in VALID_SOURCE_AGENTS:
         raise ValueError(
@@ -713,10 +809,11 @@ def mark_session_captured(
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT OR REPLACE INTO sessions_captured (session_path, memory_count, source_agent)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO sessions_captured
+                (session_path, captured_at, memory_count, source_agent, transcript_bytes, transcript_lines)
+            VALUES (?, datetime('now'), ?, ?, ?, ?)
             """,
-            (session_path, memory_count, source_agent),
+            (session_path, memory_count, source_agent, transcript_bytes, transcript_lines),
         )
 
 

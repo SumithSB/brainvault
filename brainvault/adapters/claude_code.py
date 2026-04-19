@@ -16,6 +16,7 @@ import json
 import re
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 from brainvault.adapters._redact import redact_sensitive
@@ -38,14 +39,33 @@ INSTRUCTIONS_BODY = f"""\
 Personal memory via `brainvault` MCP (persists across sessions). **Never ask** before
 `save_memory`, `register_project`, or `search_memory` — do it silently.
 
-**Session start:** `get_my_context()`; if the user names a project, also `get_project(name)`.
+**Session start (hard requirement):** On your **first** assistant turn in a **new** chat, call `get_my_context()` **before** any substantive reply or any other MCP tool, unless the user message is **only** a short social opener (e.g. hi / thanks) with **no** technical content. If they name a project, also `get_project(name)` when you can infer `name`.
 
-**While working:** New preferences/role → `save_memory` (`profile`). Project context →
-`register_project` / updates. Architectural choices → `save_memory` (`decision`) with
-**reasoning**, not just the headline. Conventions and corrections → `pattern` or `update_memory`.
+**Proactive capture — do NOT wait for "remember this":**
+- A WHY was given for a choice (library, design, approach, infra) → `save_memory(decision)` with the **reasoning**, not just the headline.
+- A bug root cause or subtle fix was found → `save_memory(pattern)` with cause + fix.
+- User corrects, redirects, or overrides your approach → `save_memory(pattern)` noting what to avoid and why.
+- New tech stack, constraints, or team conventions surface → `register_project` update or `save_memory(project)`.
+- User shows a preference for how you work together → `save_memory(profile)`.
+- **Bar:** If you would paste this into a design doc / runbook as durable context, capture it — even without the user saying "remember".
+- **Cadence (hard rule, not guideline):** After ANY of the following, call `save_memory` IN THAT SAME TURN before moving to the next task:
+    - You identified a root cause, named a bug, or explained why something failed
+    - You explained WHY a library/tool/pattern was chosen over alternatives
+    - The user corrected your approach, changed direction, or overrode a decision
+    - You resolved an ambiguity by making a concrete choice
+  Do NOT defer to the Stop hook — it mines raw text; you capture structured reasoning. Examples:
+  - "Used WAL mode because concurrent readers hit lock contention" → `save_memory(decision, ...)`
+  - "Bug was missing await in async __aexit__" → `save_memory(pattern, ...)`
 
-**Before non-trivial work:** `search_memory` on auth, database, API, deployment, or any topic
-they have raised before. On "do you remember…" / "we discussed…" → `search_memory` first.
+**Before substantive work:** `search_memory` when the task could overlap prior context — their
+stack, tools, repo areas, team conventions, or anything they've already brought up. Prefer a
+quick search before deep implementation, refactors, or debugging when relevant notes might exist.
+
+**Before answering questions about a named project, codename, acronym, or prior work** (e.g. "what do you know about X", "tell me about Y", "do you remember Z"): call `search_memory` with the salient terms first; if a matching registered project exists, also call `get_project(name)`.
+
+**After resolving ambiguity or fixing a bug:** call `save_memory` once before moving on — do not rely on the Stop hook alone.
+
+On "do you remember…" / "we discussed…" → `search_memory` first.
 
 **Outcomes:** After shipped work or reversals → `record_outcome` (sentiment: positive /
 negative / mixed).
@@ -195,6 +215,29 @@ def _mcp_entry(*, source_agent: str = "claude_code") -> dict:
     return entry
 
 
+def _same_interpreter(a: str, b: str) -> bool:
+    """True if two command paths resolve to the same executable (handles python/python3 symlinks)."""
+    if a == b:
+        return True
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return False
+
+
+def _mcp_entry_equivalent(existing: dict, canonical: dict) -> bool:
+    """True if existing MCP entry is functionally equivalent to canonical (symlink-aware command)."""
+    if not isinstance(existing, dict):
+        return False
+    if existing.get("args") != canonical.get("args"):
+        return False
+    if existing.get("env") != canonical.get("env"):
+        return False
+    cmd_a = existing.get("command", "")
+    cmd_b = canonical.get("command", "")
+    return _same_interpreter(cmd_a, cmd_b)
+
+
 def _quoted_exe() -> str:
     """sys.executable with spaces-in-path safely quoted for shell hook commands."""
     return sys.executable.replace('"', '\\"')
@@ -227,15 +270,25 @@ class ClaudeCodeAdapter(AgentAdapter):
         self.SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-    def register_mcp(self) -> bool:
+    def register_mcp(self) -> str:
         data = self._load_settings() if self.SETTINGS_PATH.exists() else {}
         data.setdefault("mcpServers", {})
-        if "brainvault" in data["mcpServers"]:
-            self._write_settings(data)
-            return False
-        data["mcpServers"]["brainvault"] = _mcp_entry(source_agent="claude_code")
+        canonical = _mcp_entry(source_agent="claude_code")
+        existing = data["mcpServers"].get("brainvault")
+        if existing is not None and _mcp_entry_equivalent(existing, canonical):
+            return "skipped"
+        data["mcpServers"]["brainvault"] = canonical
         self._write_settings(data)
-        return True
+        return "registered" if existing is None else "updated"
+
+    def configured_mcp_command(self) -> str | None:
+        if not self.SETTINGS_PATH.exists():
+            return None
+        try:
+            data = self._load_settings()
+        except SettingsJsonError:
+            return None
+        return (data.get("mcpServers") or {}).get("brainvault", {}).get("command")
 
     def unregister_mcp(self) -> bool:
         if not self.SETTINGS_PATH.exists():
@@ -429,6 +482,22 @@ class ClaudeCodeAdapter(AgentAdapter):
         candidates.sort(reverse=True)
         return [p for _, p in candidates]
 
+    def iter_all_session_files(self) -> Iterator[Path]:
+        """All top-level JSONL session files under ~/.claude/projects/, oldest first."""
+        root = self.session_dir()
+        if root is None:
+            yield from ()
+            return
+        files: list[tuple[float, Path]] = []
+        for jsonl in root.glob("*/*.jsonl"):
+            try:
+                files.append((jsonl.stat().st_mtime, jsonl))
+            except OSError:
+                continue
+        files.sort()
+        for _, p in files:
+            yield p
+
     def extract_project_name(self, session_path: Path) -> str:
         dir_name = session_path.parent.name.rstrip("-")
         parts = dir_name.split("-")
@@ -508,6 +577,38 @@ class ClaudeCodeAdapter(AgentAdapter):
                 "mcpServers.brainvault" if mcp_ok else "missing",
             )
         )
+
+        if mcp_ok:
+            import subprocess as _subprocess
+
+            cmd = (data.get("mcpServers") or {}).get("brainvault", {}).get("command", "")
+            cmd_exists = bool(cmd) and Path(cmd).is_file()
+            checks.append(
+                (
+                    "Claude MCP command path exists",
+                    cmd_exists,
+                    cmd
+                    if cmd_exists
+                    else f"{cmd or '(empty)'} not found — run 'brainvault install' to repair",
+                )
+            )
+            if cmd_exists:
+                try:
+                    r = _subprocess.run(
+                        [cmd, "-c", "import brainvault.mcp_server"],
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                    )
+                    importable = r.returncode == 0
+                    detail = (
+                        cmd
+                        if importable
+                        else (r.stderr.strip().splitlines() or ["unknown error"])[-1]
+                    )
+                    checks.append(("Claude MCP python can import brainvault", importable, detail))
+                except Exception as exc:
+                    checks.append(("Claude MCP python can import brainvault", False, str(exc)))
 
         for event, marker in (
             ("Stop", "brainvault.capture"),

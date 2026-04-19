@@ -1,6 +1,9 @@
 """
-brainvault/mcp_server.py — MCP server exposing memory tools to Claude Code.
-Runs as a stdio MCP server: python -m brainvault.mcp_server
+brainvault/mcp_server.py — MCP server exposing memory tools to coding agents.
+
+Runs as a stdio MCP server (``python -m brainvault.mcp_server``). The connecting
+host (e.g. Claude Code, Cursor) sets ``BRAINVAULT_SOURCE_AGENT`` when present.
+Optional ``BRAINVAULT_MCP_TERSE=1`` shortens tool return strings to save tokens.
 """
 
 import json
@@ -9,17 +12,60 @@ import os
 from mcp.server.fastmcp import FastMCP
 
 from brainvault import db
+from brainvault.mcp_terse import (
+    VERBOSE_MEMORY_PREVIEW_CHARS,
+    effective_search_max_chars,
+    mcp_terse_enabled,
+)
 
 mcp = FastMCP("brainvault")
 
-_DEFAULT_SEARCH_MEMORY_MAX_CHARS = 400
+_DEFAULT_SEARCH_MEMORY_MAX_CHARS = VERBOSE_MEMORY_PREVIEW_CHARS
 
 
 def _preview_memory_content(text: str, memory_id: str, max_chars: int) -> str:
     """Truncate memory text for MCP tool output (token control); full text stays in DB."""
     if len(text) <= max_chars:
         return text
+    if mcp_terse_enabled():
+        return text[:max_chars].rstrip() + f"…id={memory_id[:8]}"
     return text[:max_chars].rstrip() + f"… (id: {memory_id})"
+
+
+def _reflect_output_terse(data: dict) -> str:
+    """Compact reflection for BRAINVAULT_MCP_TERSE=1."""
+    parts: list[str] = []
+    open_decisions = data["open_decisions"]
+    if open_decisions:
+        parts.append(f"OD:{len(open_decisions)}")
+        for d in open_decisions[:25]:
+            proj = d["project"] or "."
+            c = d["content"].replace("\n", " ")[:100]
+            parts.append(f"{d['id'][:8]}|[{proj}]{c}")
+    patterns = data["cross_project_patterns"]
+    if patterns:
+        parts.append(f"PAT:{len(patterns)}")
+        for kw, projs in patterns[:20]:
+            parts.append(f"{kw}→{','.join(projs[:6])}")
+    stale = data["stale_projects"]
+    if stale:
+        parts.append(f"ST:{len(stale)}")
+        for p in stale[:15]:
+            last = (p.get("last_active") or p.get("updated_at") or "")[:10]
+            parts.append(f"{p['name']}:{last}")
+    hot = data["hot_memories"]
+    if hot:
+        parts.append(f"HOT:{len(hot)}")
+        for m in hot[:12]:
+            proj = m["project"] or "."
+            c = m["content"].replace("\n", " ")[:80]
+            parts.append(f"{m['memory_type']}|[{proj}]×{m['access_count']} {c}")
+    sentiment = data.get("outcome_sentiment_summary", {})
+    if sentiment:
+        parts.append("OUT:" + ",".join(f"{k}={v}" for k, v in sentiment.items() if v))
+    if not parts:
+        return "refl ∅"
+    return "\n".join(parts)
 
 
 @mcp.tool()
@@ -39,6 +85,8 @@ def get_my_context() -> str:
     stats = db.get_stats()
 
     if not profiles and not projects:
+        if mcp_terse_enabled():
+            return "empty → save_memory(profile)|register_project|save_memory(decision)"
         return (
             "No context stored yet.\n"
             "To build your brainvault:\n"
@@ -46,6 +94,34 @@ def get_my_context() -> str:
             "- Register a project: call register_project\n"
             "- Save decisions as you make them: call save_memory with type 'decision'"
         )
+
+    if mcp_terse_enabled():
+        parts: list[str] = [
+            f"T={stats['total_memories']} P={stats['total_projects']}",
+        ]
+        for p in profiles:
+            parts.append(f"pf:{p['content'][:240]}{'…' if len(p['content']) > 240 else ''}")
+        import datetime
+
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        for p in projects:
+            stack = json.loads(p["stack"]) if isinstance(p["stack"], str) else p["stack"]
+            stack_str = ",".join(stack) if stack else "—"
+            last_active = p.get("last_active") or p.get("updated_at")
+            stale = ""
+            if last_active:
+                try:
+                    la = datetime.datetime.fromisoformat(last_active)
+                    days_idle = (now - la).days
+                    if days_idle >= 30:
+                        stale = f"~{days_idle}d"
+                except ValueError:
+                    pass
+            bit = f"{p['name']}|{stack_str}|{p['description'][:100]}{stale}"
+            if p["notes"]:
+                bit += f"|n:{p['notes'][:80]}"
+            parts.append(bit)
+        return "\n".join(parts)
 
     lines = ["# Your Brainvault Context\n"]
 
@@ -94,24 +170,45 @@ def search_memory(
     Search your memory for context relevant to a query.
 
     Call this when:
-    - Starting work on a non-trivial feature (auth, DB design, API structure, deployment)
+    - Starting non-trivial work where prior notes might exist (design, debugging, refactors)
     - User mentions a topic you might have decided before
     - User asks 'do you remember...' or 'we discussed...'
-    - Before making an architectural recommendation
+    - Before making a recommendation that could contradict stored decisions
 
     Args:
-        query: What to search for (e.g. 'auth', 'database choice', 'rate limiting')
+        query: What to search for (e.g. 'error handling convention', 'migration strategy')
         project: Optional project name to prioritise results from that project
-        max_chars: Max characters per memory body in the response (default 400); full text remains in DB
+        max_chars: Max characters per memory body in the response (default 400, or 200 when
+            BRAINVAULT_MCP_TERSE=1); full text remains in DB
     """
     db.init_db()
     if not query.strip():
-        return "Please provide a search query."
+        return "need query" if mcp_terse_enabled() else "Please provide a search query."
 
+    cap = effective_search_max_chars(max_chars, default_verbose=_DEFAULT_SEARCH_MEMORY_MAX_CHARS)
     results = db.search_memories(query, project=project, limit=5)
 
     if not results:
-        return f'No relevant memory found for: "{query}"'
+        return f"0 hits q={query!r}" if mcp_terse_enabled() else f'No relevant memory found for: "{query}"'
+
+    if mcp_terse_enabled():
+        out: list[str] = [f"n={len(results)} q={query!r}"]
+        for i, m in enumerate(results, 1):
+            proj_label = m["project"] or "."
+            fts_hit = m.pop("_fts_rank", None) is not None
+            vec_hit = m.pop("_vec_rank", None) is not None
+            if vec_hit and fts_hit:
+                rnk = "H"
+            elif vec_hit:
+                rnk = "V"
+            else:
+                rnk = "F"
+            body = _preview_memory_content(m["content"], m["id"], cap)
+            kw = json.loads(m["keywords"]) if isinstance(m["keywords"], str) else m["keywords"]
+            kw_s = ",".join(kw[:5]) if kw else ""
+            tail = f"|{kw_s}" if kw_s else ""
+            out.append(f"{i}|{m['memory_type']}|{proj_label}|{rnk}|{body}|{m['id'][:8]}{tail}")
+        return "\n".join(out)
 
     lines = [f'Found {len(results)} memories for "{query}":\n']
     for i, m in enumerate(results, 1):
@@ -126,7 +223,7 @@ def search_memory(
         else:
             tag = ""
         lines.append(f"[{i}] {m['memory_type']} · project: {proj_label}{tag}")
-        body = _preview_memory_content(m["content"], m["id"], max_chars)
+        body = _preview_memory_content(m["content"], m["id"], cap)
         lines.append(f"    {body}")
         if keywords:
             lines.append(f"    Keywords: {', '.join(keywords[:6])}")
@@ -160,6 +257,8 @@ def save_memory(
     """
     db.init_db()
     if memory_type not in db.VALID_MEMORY_TYPES:
+        if mcp_terse_enabled():
+            return f"bad type {memory_type!r}"
         return f"Invalid memory_type '{memory_type}'. Must be one of: {', '.join(sorted(db.VALID_MEMORY_TYPES))}"
 
     source_agent = (os.environ.get("BRAINVAULT_SOURCE_AGENT") or "claude_code").strip()
@@ -174,6 +273,9 @@ def save_memory(
         source="agent",
         source_agent=source_agent,
     )
+    if mcp_terse_enabled():
+        sc = f"p={project}" if project else "g"
+        return f"ok {memory_id[:8]} {memory_type} {sc}"
     scope = f"project: {project}" if project else "global"
     return f"Saved. Memory ID: {memory_id} ({memory_type} · {scope})"
 
@@ -191,12 +293,12 @@ def register_project(
     Call this when the user describes a project at the start of a session or mentions
     working on something new.
 
-    Example trigger: 'I'm working on pluto — FastAPI backend, PostgreSQL, handles ML jobs'
+    Example trigger: 'I'm working on the billing service — Go microservice, talks to Postgres'
 
     Args:
-        name: Short project identifier (e.g. 'pluto', 'ivy', 'studia')
+        name: Short project identifier (e.g. 'billing', 'mobile-app')
         description: What the project does
-        stack: Technologies used (e.g. ['FastAPI', 'PostgreSQL', 'Redis'])
+        stack: Technologies used (e.g. ['TypeScript', 'React', 'Postgres'])
         notes: Any additional context worth remembering
     """
     db.init_db()
@@ -205,6 +307,8 @@ def register_project(
 
     db.save_project(name=name, description=description, stack=stack, notes=notes)
     stack_str = ", ".join(stack) if stack else "not specified"
+    if mcp_terse_enabled():
+        return f"ok proj={name} {stack_str}"
     return f"Project '{name}' saved. Stack: {stack_str}."
 
 
@@ -216,7 +320,7 @@ def get_project(name: str, limit: int = 20) -> str:
     Call this when the user mentions a project by name at the start of a session.
 
     Args:
-        name: The project name (e.g. 'pluto')
+        name: The project name (e.g. 'billing')
         limit: Max memories listed (newest first); use search_memory to drill into large projects
     """
     db.init_db()
@@ -224,7 +328,26 @@ def get_project(name: str, limit: int = 20) -> str:
     memories = db.get_project_memories(name)
 
     if not project and not memories:
-        return f"Project '{name}' not found. Use register_project to add it."
+        return f"missing {name!r}" if mcp_terse_enabled() else f"Project '{name}' not found. Use register_project to add it."
+
+    if mcp_terse_enabled():
+        chunks: list[str] = []
+        if project:
+            stack = (
+                json.loads(project["stack"]) if isinstance(project["stack"], str) else project["stack"]
+            )
+            stk = ",".join(stack) if stack else "—"
+            chunks.append(f"{project['name']}|{stk}|{project['description'][:120]}")
+            if project["notes"]:
+                chunks.append(f"n:{project['notes'][:100]}")
+        if memories:
+            total = len(memories)
+            shown = memories[:limit]
+            chunks.append(f"m:{total}/{limit}")
+            for m in shown:
+                c = m["content"].replace("\n", " ")[:160]
+                chunks.append(f"[{m['memory_type']}] {c}{'…' if len(m['content']) > 160 else ''}")
+        return "\n".join(chunks)
 
     lines = []
 
@@ -272,8 +395,8 @@ def record_outcome(memory_id: str, outcome: str, sentiment: str = None) -> str:
 
     Args:
         memory_id: UUID of the decision memory (from search results or save confirmations)
-        outcome: What actually happened — be specific (e.g. 'JWT worked well at scale,
-                 no issues after 6 months' or 'caused auth bugs on mobile, switched to sessions')
+        outcome: What actually happened — be specific (e.g. 'Held up under load in production'
+                 or 'Had to roll back: edge cases in mobile clients')
         sentiment: One of 'positive', 'negative', 'mixed' — overall verdict on how the decision played out
     """
     db.init_db()
@@ -281,8 +404,13 @@ def record_outcome(memory_id: str, outcome: str, sentiment: str = None) -> str:
         return "Outcome cannot be empty."
     updated = db.record_outcome(memory_id, outcome, sentiment=sentiment)
     if updated:
+        if mcp_terse_enabled():
+            s = f" {sentiment}" if sentiment else ""
+            return f"ok outcome {memory_id[:8]}{s}"
         sentiment_note = f" (sentiment: {sentiment})" if sentiment else ""
         return f"Outcome recorded for decision {memory_id}{sentiment_note}."
+    if mcp_terse_enabled():
+        return f"fail {memory_id[:8]} not decision"
     return (
         f"Memory {memory_id} not found or is not type 'decision'. "
         "Use search_memory to find the correct ID."
@@ -303,10 +431,13 @@ def reflect() -> str:
     - Open decisions that have no outcome recorded (potential forgotten follow-ups)
     - Cross-project patterns (topics that keep coming up across multiple projects)
     - Stale projects (no activity in 30+ days — may need a decision on whether to archive)
-    - Hot memories (most frequently accessed — what Claude keeps needing to look up)
+    - Hot memories (most frequently accessed — what sessions keep revisiting)
     """
     db.init_db()
     data = db.get_reflection_data()
+
+    if mcp_terse_enabled():
+        return _reflect_output_terse(data)
 
     lines = ["# Brainvault Reflection\n"]
 
@@ -343,7 +474,7 @@ def reflect() -> str:
     hot = data["hot_memories"]
     if hot:
         lines.append("## Most Accessed Memories")
-        lines.append("What Claude keeps looking up — your high-value knowledge:\n")
+        lines.append("Often consulted — typically high-value context:\n")
         for m in hot:
             proj = m["project"] or "global"
             lines.append(
@@ -380,7 +511,7 @@ def get_code_context(
     Get targeted code context before starting feature work on a project.
 
     Call this INSTEAD OF reading many files when:
-    - Starting a non-trivial feature (auth, DB migrations, API design, deployment)
+    - Starting a non-trivial feature or cross-cutting change
     - About to touch a module not seen in this session
     - User asks "where should I add X?" or "what files touch Y?"
     - Making a change that likely spans 2+ files
@@ -389,7 +520,8 @@ def get_code_context(
 
     Args:
         project:       Project name (must match a registered project).
-        query:         What you're about to work on: "add JWT refresh token" beats "auth".
+        query:         What you're about to work on — specific beats vague (e.g. "add retry to
+                       checkout client" beats "checkout").
         include_files: Include ranked file list with co-change data (default True).
                        Set False to get only relevant memories.
 
@@ -405,6 +537,21 @@ def get_code_context(
         return "Error: query cannot be empty."
 
     data = db.get_code_context_data(project=project, query=query, limit=5)
+
+    if mcp_terse_enabled():
+        chunks: list[str] = [f"ctx {project!r} q={query!r}"]
+        for m in data.get("memories", []):
+            tag = "g" if m.get("source") == "git" else ""
+            c = m["content"].replace("\n", " ")[:140]
+            chunks.append(f"{m['memory_type']}{tag}|{c}")
+        if include_files:
+            for f in data.get("ranked_files", [])[:12]:
+                line = f"{f['file_path']}|{f['language']}|{f['reason'][:80]}"
+                if f.get("cochange_partners"):
+                    line += f"|+{','.join(f['cochange_partners'][:3])}"
+                chunks.append(line)
+        return "\n".join(chunks)
+
     lines = [f"# Code Context: {project} — {query}\n"]
 
     memories = data.get("memories", [])
@@ -464,9 +611,11 @@ def update_memory(
     """
     db.init_db()
     if content is None and memory_type is None and project is None:
-        return "No changes requested. Provide at least one of: content, memory_type, project."
+        return "upd noop" if mcp_terse_enabled() else "No changes requested. Provide at least one of: content, memory_type, project."
 
     if memory_type and memory_type not in db.VALID_MEMORY_TYPES:
+        if mcp_terse_enabled():
+            return f"bad type {memory_type!r}"
         return f"Invalid memory_type '{memory_type}'. Must be one of: {', '.join(sorted(db.VALID_MEMORY_TYPES))}"
 
     updated = db.update_memory(
@@ -476,29 +625,42 @@ def update_memory(
         project=project,
     )
     if updated:
+        if mcp_terse_enabled():
+            parts = [p for p in [content and "c", memory_type and "t", project and "p"] if p]
+            return f"upd {memory_id[:8]} {'+'.join(parts) or 'ok'}"
         parts = [
             f for f, v in [("content", content), ("type", memory_type), ("project", project)] if v
         ]
         return f"Memory {memory_id} updated ({', '.join(parts)})."
-    return f"Memory {memory_id} not found."
+    return f"!mem {memory_id[:8]}" if mcp_terse_enabled() else f"Memory {memory_id} not found."
 
 
 @mcp.tool()
-def forget(memory_id: str) -> str:
+def forget(memory_id: str = None, project: str = None) -> str:
     """
-    Delete a specific memory by ID.
+    Delete a specific memory by ID, or all memories for a project.
 
-    Call this when user says 'forget that', 'remove that memory', or 'that's no longer true'.
-    Memory IDs are shown in search results and save confirmations.
+    Call with memory_id when user says 'forget that', 'remove that memory', or 'that's no longer true'.
+    Call with project when user says 'forget everything about <project>' or 'wipe <project> memories'.
 
     Args:
-        memory_id: The UUID of the memory to delete
+        memory_id: UUID of a single memory to delete (mutually exclusive with project)
+        project:   Project name — deletes ALL memories for that project
     """
     db.init_db()
-    deleted = db.delete_memory(memory_id)
-    if deleted:
-        return f"Memory {memory_id} deleted."
-    return f"Memory {memory_id} not found."
+    if project and memory_id:
+        return "Error: provide memory_id OR project, not both."
+    if project:
+        count = db.delete_project_memories(project)
+        if count:
+            return f"del proj:{project} ({count})" if mcp_terse_enabled() else f"Deleted {count} memories for project '{project}'."
+        return f"!proj {project[:16]}" if mcp_terse_enabled() else f"No memories found for project '{project}'."
+    if memory_id:
+        deleted = db.delete_memory(memory_id)
+        if deleted:
+            return f"del {memory_id[:8]}" if mcp_terse_enabled() else f"Memory {memory_id} deleted."
+        return f"!mem {memory_id[:8]}" if mcp_terse_enabled() else f"Memory {memory_id} not found."
+    return "Error: provide memory_id or project."
 
 
 @mcp.tool()
@@ -529,7 +691,18 @@ def get_recent_activity(
 
     if not sessions:
         scope = f" for project '{project}'" if project else ""
+        if mcp_terse_enabled():
+            return f"act ∅ {days}d{scope}"
         return f"No activity recorded in the last {days} days{scope}."
+
+    if mcp_terse_enabled():
+        bits = [f"act {days}d ev={total} s={len(sessions)}"]
+        for s in sessions:
+            sid = s["session_id"]
+            proj_label = s.get("project") or "."
+            tools = ",".join(s.get("tools", [])[:8])
+            bits.append(f"{sid[:12]}|{proj_label}|{s['event_count']}|{tools}")
+        return "\n".join(bits)
 
     lines = [f"# Recent Activity (last {days} days)\n"]
     lines.append(f"Total events: {total} across {len(sessions)} session(s)\n")
@@ -568,7 +741,7 @@ def get_session_timeline(session_id: str, limit: int = 50) -> str:
     events_all = db.get_session_timeline(session_id)
 
     if not events_all:
-        return f"No events found for session '{session_id}'."
+        return f"tl - {session_id[:12]}" if mcp_terse_enabled() else f"No events found for session '{session_id}'."
 
     total = len(events_all)
     older_truncated = 0
@@ -577,6 +750,19 @@ def get_session_timeline(session_id: str, limit: int = 50) -> str:
         events = events_all[-limit:]
     else:
         events = events_all
+
+    if mcp_terse_enabled():
+        hdr = f"tl {session_id[:12]} n={total}"
+        if older_truncated:
+            hdr += f" +{older_truncated}trunc"
+        bits = [hdr]
+        for ev in events:
+            ts = (ev.get("timestamp") or "")[:16]
+            tool = ev["tool_name"]
+            summary = (ev.get("input_summary", "") or "")[:120]
+            out = (ev.get("output_summary", "") or "")[:60]
+            bits.append(f"{ts}|{tool}|{summary}|{out}")
+        return "\n".join(bits)
 
     lines = [f"# Session Timeline: `{session_id[:12]}…`\n"]
     lines.append(f"{total} events recorded\n")

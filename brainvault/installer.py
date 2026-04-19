@@ -1,8 +1,8 @@
 """
 brainvault/installer.py — Adapter-dispatched install / uninstall.
 
-The host-specific filesystem work (Claude Code settings.json, Cursor mcp.json,
-rules files, CLAUDE.md) lives in `brainvault.adapters`. This module:
+The host-specific filesystem work (per-agent config: e.g. Claude Code ``settings.json``,
+Cursor ``mcp.json``, rules, managed instructions) lives in ``brainvault.adapters``. This module:
 
   - Resolves which adapters to target (auto-detect installed, or explicit list)
   - Runs MCP registration, hook registration, instruction injection per adapter
@@ -39,10 +39,12 @@ def _seed_vault() -> None:
     print("  Seeding vault from git history (Ctrl+C to skip)…\n")
     try:
         root = Path.home()
-        since = (datetime.date.today() - datetime.timedelta(days=365)).isoformat()
+        since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=365)
         repos = discover_repos(root, progress=sys.stdout.isatty())
         print(f"\n  Found {len(repos)} repos. Scanning (last 12 months, limit 200 commits each)…\n")
         total_saved = 0
+        skipped_unsafe: list[Path] = []
+        skipped_other: list[tuple[Path, str]] = []
         for repo in repos:
             project = repo.name
             try:
@@ -52,15 +54,34 @@ def _seed_vault() -> None:
                     print(f"  {repo}  →  {saved} memories saved")
                     total_saved += saved
             except Exception as e:
-                print(f"  (skipped {repo}: {e})", file=sys.stderr)
+                msg = str(e).lower()
+                if (
+                    "safe.directory" in msg
+                    or "unsafe repository" in msg
+                    or "dubious ownership" in msg
+                ):
+                    skipped_unsafe.append(repo)
+                else:
+                    skipped_other.append((repo, str(e)))
         print(
             f"\n  ✓ Git scan complete — {total_saved} memories saved across {len(repos)} repos.\n"
         )
+        if skipped_unsafe:
+            print(
+                f"  {len(skipped_unsafe)} repo(s) skipped — git flagged them as owned by another user."
+            )
+            print("  Fix (one time): git config --global --add safe.directory '*'")
+            print("  Then rerun:    brainvault bootstrap-git ~\n")
+        if skipped_other:
+            print(f"  {len(skipped_other)} repo(s) skipped due to other errors. First 3:")
+            for r, err in skipped_other[:3]:
+                print(f"    · {r}: {err}")
+            print()
     except KeyboardInterrupt:
         print("\n  Skipped. Run 'brainvault bootstrap-git ~/' any time.\n")
         return
 
-    print("  Importing past Claude Code session summaries (Ctrl+C to skip)…\n")
+    print("  Importing session JSONL from ~/.claude/projects (Ctrl+C to skip)…\n")
     try:
         from brainvault.bootstrap import run as bootstrap_run
 
@@ -94,10 +115,15 @@ def _install_one(adapter: AgentAdapter) -> None:
         return
 
     try:
-        if adapter.register_mcp():
+        mcp_status = adapter.register_mcp()
+        if mcp_status == "registered":
             print("    ✓ MCP server registered")
-        else:
+        elif mcp_status == "updated":
+            print("    ✓ MCP server updated (stale path replaced)")
+        elif mcp_status == "skipped":
             print("    · MCP server already registered (skipped)")
+        else:
+            print(f"    · MCP server: {mcp_status}")
     except SettingsJsonError as e:
         print(f"    ✗ {e}", file=sys.stderr)
         return
@@ -168,18 +194,44 @@ def install(agents: list[str] | None = None) -> None:
 
     if not targets:
         print("  ✗ No supported coding agents detected.")
-        print("    Install Claude Code or Cursor first, then run `brainvault install` again.")
+        print("    Install a supported agent (e.g. Claude Code or Cursor), then run `brainvault install` again.")
         sys.exit(1)
 
     for adapter in targets:
         _install_one(adapter)
         print()
 
-    print("  Done. Restart your coding agent to activate brainvault.\n")
-    print("  What happens next:")
-    print("  - Every session will start with your personal context loaded")
-    print("  - Say 'remember this' and your agent will save it to your vault")
-    print("  - Session notes are auto-captured after each agent stop (Claude Code + Cursor)\n")
+    print("  ✓ Install complete.\n")
+    print("  → Restart your coding agent now — MCP servers only load at startup.")
+    print("  → Verify with: brainvault doctor\n")
+    print("  ┌─ What happens automatically ────────────────────────────────────────┐")
+    print("  │  • Session start  : your personal context is loaded into every chat  │")
+    print("  │  • While working  : say 'remember this' → saved to vault             │")
+    print("  │  • Session end    : notes auto-captured after each agent stop         │")
+    print("  └──────────────────────────────────────────────────────────────────────┘\n")
+    print("  ┌─ Seed your vault from past work (run once) ─────────────────────────┐")
+    print("  │  Mine git history for architectural decisions across all local repos: │")
+    print("  │    brainvault bootstrap-git ~/                                        │")
+    print("  │                                                                        │")
+    print("  │  Import ~/.claude/projects session JSONL (Claude Code transcript store): │")
+    print("  │    brainvault bootstrap                                               │")
+    print("  │                                                                        │")
+    print("  │  Scan a single repo (re-run any time after new commits):              │")
+    print("  │    brainvault git-scan /path/to/repo                                  │")
+    print("  └──────────────────────────────────────────────────────────────────────┘\n")
+    print("  ┌─ Explore & manage your vault ───────────────────────────────────────┐")
+    print("  │  Index a repo's file structure + co-change matrix:                   │")
+    print("  │    brainvault index-repo /path/to/repo                               │")
+    print("  │                                                                        │")
+    print("  │  Search memories from the terminal:                                   │")
+    print("  │    brainvault search 'error handling'                                  │")
+    print("  │                                                                        │")
+    print("  │  Generate an interactive HTML brain graph:                            │")
+    print("  │    brainvault graph --open                                            │")
+    print("  │                                                                        │")
+    print("  │  Vault health + stats:                                                │")
+    print("  │    brainvault status    brainvault stats    brainvault doctor         │")
+    print("  └──────────────────────────────────────────────────────────────────────┘\n")
 
     if db.get_stats()["total_memories"] == 0:
         _seed_vault()

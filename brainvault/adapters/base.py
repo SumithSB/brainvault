@@ -10,6 +10,7 @@ transcript formats, project-name encodings. The rest of brainvault
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -81,8 +82,13 @@ class AgentAdapter(ABC):
         """Return True if the host agent appears to be installed on this machine."""
 
     @abstractmethod
-    def register_mcp(self) -> bool:
-        """Add brainvault to the host's MCP server list. True if newly added, False if skipped.
+    def register_mcp(self) -> str:
+        """Add or repair the brainvault MCP server entry.
+
+        Returns one of:
+          'registered' — no prior entry; newly added.
+          'updated'    — prior entry existed but differed from canonical; replaced.
+          'skipped'    — prior entry already equals canonical; no write performed.
 
         Implementations must parse existing config defensively, back up on
         parse errors, and never overwrite with an empty object.
@@ -128,6 +134,10 @@ class AgentAdapter(ABC):
         """JSONL transcripts touched within max_age_seconds, newest first. Default: none."""
         return []
 
+    def iter_all_session_files(self) -> Iterator[Path]:
+        """All JSONL session transcripts for bulk bootstrap (oldest first). Default: none."""
+        yield from ()
+
     def extract_project_name(self, session_path: Path) -> str:
         """Derive the project name from a session transcript path. Default: directory basename."""
         return session_path.parent.name
@@ -140,6 +150,15 @@ class AgentAdapter(ABC):
 
     def event_from_payload(self, payload: dict) -> SessionEvent | None:
         """Normalize a hook payload into a SessionEvent. Return None to drop."""
+        return None
+
+    def configured_mcp_command(self) -> str | None:
+        """Return the `command` field from the stored MCP entry, or None if absent/unreadable.
+
+        Used by `brainvault doctor` to probe the exact Python interpreter that
+        Claude Code / Cursor will use to start the MCP server — which may differ
+        from `sys.executable` when installed in a virtualenv or via pipx.
+        """
         return None
 
     # --- diagnostics ------------------------------------------------------
