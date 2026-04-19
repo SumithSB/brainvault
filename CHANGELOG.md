@@ -14,6 +14,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Added
 
 - **Bulk project delete** — `brainvault forget --project <name>` deletes all memories for a project in one command. MCP `forget` tool gains an optional `project` parameter for the same from within Claude. FTS5, vector, and link rows cleaned up automatically via existing triggers/CASCADE.
+- **`brainvault save` command** — quickly capture a memory from the terminal without opening Claude Code. Supports `--type` (decision/pattern/note/profile/project) and `--project`. Also reads from stdin for piped input.
 
 ### Improved
 
@@ -25,6 +26,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **README** — Added "How it works in practice" section with three concrete usage examples (session start, bug recall, new project kickoff).
 - **README** — Added "When does it get good?" progression table setting honest expectations at day 1, one week, and one month.
 - **README** — Added "Host support" section positioning Claude Code as the primary experience and documenting Cursor's limitations (Agent mode only, model compliance, rules vs system prompt).
+- **README** — Added CI badge (tests passing status visible on GitHub and PyPI).
+- **README** — Windows platform support note updated to "best-effort" after hook path fix.
+
+### Fixed
+
+- **Windows hooks** — `_quoted_exe()` now uses `Path(sys.executable).as_posix()` so hook commands use forward-slash paths (`C:/Program Files/.../python.exe`). Both cmd.exe and PowerShell accept forward slashes inside quoted strings — hooks now execute correctly on Windows instead of failing silently.
 
 ## [0.2.5] - 2026-04-18
 

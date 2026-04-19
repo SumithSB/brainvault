@@ -536,5 +536,47 @@ class TestUsageHelp:
         with pytest.raises(SystemExit):
             cli_main()
         out = capsys.readouterr().out
-        for keyword in ("uninstall", "doctor", "export", "import"):
+        for keyword in ("uninstall", "doctor", "export", "import", "save"):
             assert keyword in out
+
+
+# ---------------------------------------------------------------------------
+# brainvault save
+# ---------------------------------------------------------------------------
+
+
+class TestSaveCommand:
+    def test_save_basic(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", ["brainvault", "save", "chose Redis over Memcached"])
+        cli_main()
+        out = capsys.readouterr().out
+        assert "Saved note" in out
+
+    def test_save_with_type_and_project(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "brainvault",
+                "save",
+                "use WAL mode for concurrent reads",
+                "--type",
+                "decision",
+                "--project",
+                "myapp",
+            ],
+        )
+        cli_main()
+        out = capsys.readouterr().out
+        assert "Saved decision" in out
+        assert "[myapp]" in out
+        results = db.search_memories("WAL mode concurrent reads")
+        assert any("WAL mode" in r["content"] for r in results)
+
+    def test_save_no_content_exits(self, monkeypatch):
+        import io
+
+        monkeypatch.setattr(sys, "argv", ["brainvault", "save"])
+        monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+        with pytest.raises(SystemExit):
+            cli_main()

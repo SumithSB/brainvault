@@ -412,7 +412,9 @@ def test_mine_session_transcript_returns_empty_for_low_signal(tmp_path):
                 "type": "assistant",
                 "message": {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": "Sure! Let me know if you need anything else."}],
+                    "content": [
+                        {"type": "text", "text": "Sure! Let me know if you need anything else."}
+                    ],
                 },
             },
         ],

@@ -16,6 +16,7 @@
 
   <p>
     <a href="https://pypi.org/project/brainvault/"><img src="https://img.shields.io/pypi/v/brainvault.svg?style=flat-square" alt="PyPI version"/></a>
+    <a href="https://github.com/SumithSB/brainvault/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/SumithSB/brainvault/ci.yml?branch=main&style=flat-square&label=tests" alt="CI"/></a>
     <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square" alt="Python 3.10+"/>
     <img src="https://img.shields.io/badge/storage-SQLite-lightgrey?style=flat-square" alt="SQLite"/>
     <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License"/>
@@ -203,6 +204,7 @@ Run `brainvault bootstrap` and `brainvault bootstrap-git ~/Projects` after insta
 | Mine **git** across many repos | `brainvault bootstrap-git ~/Projects` (or `~`) |
 | Inspect / fix wiring | `brainvault doctor` |
 | Search from terminal | `brainvault search "<query>"` |
+| **Quickly save a decision/pattern** without opening Claude | `brainvault save "chose celery over rq: better retry budgets" --type decision --project myapp` |
 | Vault overview | `brainvault status`, `brainvault stats`, `brainvault reflect` |
 | Optional **meaning**-based search (heavier install) | `pip install 'brainvault[semantic]'` then `brainvault embed` once to backfill vectors |
 
@@ -224,6 +226,12 @@ brainvault embed
 ```
 
 Adds local embeddings (fastembed + sqlite-vec); first run downloads a small model to `~/.cache/huggingface`. Search blends keywords + vectors when extras are installed. **Not required** for normal use.
+
+---
+
+## Platform support
+
+macOS and Linux are fully supported and tested. **Windows** support is best-effort — hook commands use forward-slash paths (`C:/Users/...`) which work in both cmd.exe and PowerShell, and all file I/O is UTF-8. If you hit an issue on Windows, please [open an issue](https://github.com/SumithSB/brainvault/issues).
 
 ---
 

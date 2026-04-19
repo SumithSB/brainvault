@@ -190,9 +190,7 @@ def test_bootstrap_cursor_saves_transcript_memories(tmp_path, monkeypatch):
     transcript.parent.mkdir(parents=True)
     long_q = "Review this codebase for security issues and performance. " * 4
     transcript.write_text(
-        json.dumps(
-            {"role": "user", "message": {"content": [{"type": "text", "text": long_q}]}}
-        )
+        json.dumps({"role": "user", "message": {"content": [{"type": "text", "text": long_q}]}})
         + "\n",
         encoding="utf-8",
     )

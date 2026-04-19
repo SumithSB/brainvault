@@ -194,7 +194,9 @@ def install(agents: list[str] | None = None) -> None:
 
     if not targets:
         print("  ✗ No supported coding agents detected.")
-        print("    Install a supported agent (e.g. Claude Code or Cursor), then run `brainvault install` again.")
+        print(
+            "    Install a supported agent (e.g. Claude Code or Cursor), then run `brainvault install` again."
+        )
         sys.exit(1)
 
     for adapter in targets:

@@ -239,8 +239,14 @@ def _mcp_entry_equivalent(existing: dict, canonical: dict) -> bool:
 
 
 def _quoted_exe() -> str:
-    """sys.executable with spaces-in-path safely quoted for shell hook commands."""
-    return sys.executable.replace('"', '\\"')
+    """sys.executable as a forward-slash POSIX path, safely quoted for hook commands.
+
+    Uses as_posix() so Windows paths (C:\\Program Files\\...) become C:/Program Files/...
+    which both cmd.exe and PowerShell accept inside double-quoted strings.
+    """
+    from pathlib import Path
+
+    return Path(sys.executable).as_posix().replace('"', '\\"')
 
 
 # ---------------------------------------------------------------------------

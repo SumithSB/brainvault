@@ -258,7 +258,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE memories ADD COLUMN content_hash TEXT")
 
     existing_idx = {
-        row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
     }
     if "idx_memories_content_hash" not in existing_idx:
         conn.execute(

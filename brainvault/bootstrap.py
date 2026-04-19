@@ -165,7 +165,9 @@ def bootstrap(
                 saved += 1
                 stats["ai_titles"] += 1
 
-            db.mark_session_captured(str(session_path), memory_count=saved, source_agent=_CLAUDE_AGENT)
+            db.mark_session_captured(
+                str(session_path), memory_count=saved, source_agent=_CLAUDE_AGENT
+            )
             stats["total_memories"] += saved
 
             if verbose and saved > 0:

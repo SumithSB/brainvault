@@ -412,9 +412,7 @@ def scan_repo(
             continue
 
         body = _get_commit_body(resolved, commit["hash"])
-        memory_type = _refine_memory_type_from_body(
-            commit, body, _classify_memory_type(commit)
-        )
+        memory_type = _refine_memory_type_from_body(commit, body, _classify_memory_type(commit))
         content = _format_memory_content(commit, stats, body=body)
         db.save_memory(
             content, memory_type, project=project, source="git", source_agent=db.SYSTEM_SOURCE_AGENT

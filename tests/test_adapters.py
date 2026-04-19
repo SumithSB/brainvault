@@ -625,7 +625,9 @@ class TestCursorAdapter:
         from brainvault.adapters.cursor import decode_workspace_slug
 
         assert decode_workspace_slug("Users-sumithsb-Projects-brainvault") == "brainvault"
-        assert decode_workspace_slug("Users-sumithsb-UoL-Dissertation-ssb49") == "Dissertation-ssb49"
+        assert (
+            decode_workspace_slug("Users-sumithsb-UoL-Dissertation-ssb49") == "Dissertation-ssb49"
+        )
         assert decode_workspace_slug("Users-sumithsb-Tml-pluto-api") == "pluto-api"
         assert decode_workspace_slug("Users-sumithsb-Downloads-Apache-Logs") == "Apache-Logs"
         assert decode_workspace_slug("Users-sumithsb") == "Users-sumithsb"
