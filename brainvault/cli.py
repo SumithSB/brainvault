@@ -47,6 +47,9 @@ def main() -> None:
     elif cmd == "init":
         _cmd_init()
 
+    elif cmd == "save":
+        _cmd_save()
+
     elif cmd == "embed":
         _cmd_embed()
 
@@ -109,12 +112,15 @@ def _print_usage() -> None:
     print("  git-scan      Mine git history for architectural decision memories")
     print("  bootstrap-git Discover and scan all local git repos under a path")
     print("  index-repo    Index file structure and co-change matrix for a repo")
-    print("  bootstrap  Import session transcripts (Claude + Cursor); --host claude_code|cursor|all")
+    print(
+        "  bootstrap  Import session transcripts (Claude + Cursor); --host claude_code|cursor|all"
+    )
     print("  search     Search stored memories")
     print("  status     Show vault health at a glance")
     print("  update     Edit an existing memory by ID")
     print("  graph      Generate HTML brain graph of all memories")
     print("  reflect    Surface cross-project patterns and open decisions")
+    print("  save       Quickly save a memory from the terminal (--type, --project)")
     print("  forget     Delete a memory by ID, or all memories for a project (--project <name>)")
     print("  stats      Show memory statistics")
     print("  sessions   List recent agent sessions and activity (tagged by host)")
@@ -263,7 +269,9 @@ def _pick_agents_interactive(skip_prompt: bool = False) -> list[str] | None:
     if not detected:
         print("  No supported coding agents detected on this machine.")
         print("  Supported: " + ", ".join(cls.display_name for cls in ALL_ADAPTERS))
-        print("\n  Install a supported coding agent first (e.g. Claude Code or Cursor), then re-run `brainvault install`.")
+        print(
+            "\n  Install a supported coding agent first (e.g. Claude Code or Cursor), then re-run `brainvault install`."
+        )
         return []
 
     if len(detected) == 1 or skip_prompt:
@@ -1314,6 +1322,42 @@ def _cmd_reflect() -> None:
 
     if not any([open_decisions, patterns, stale, hot, sentiment]):
         print("Not enough data yet for meaningful reflection. Keep building memories.")
+
+
+def _cmd_save() -> None:
+    """Quickly save a memory from the terminal."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="brainvault save",
+        description="Save a memory from the terminal without opening Claude Code.",
+    )
+    parser.add_argument("content", nargs="?", help="Memory content (or pass via stdin)")
+    parser.add_argument(
+        "--type",
+        dest="memory_type",
+        default="note",
+        choices=["decision", "pattern", "note", "profile", "project"],
+        help="Memory type (default: note)",
+    )
+    parser.add_argument("--project", default=None, help="Project name to tag this memory")
+
+    args = parser.parse_args(sys.argv[2:])
+
+    content = args.content
+    if not content:
+        if not sys.stdin.isatty():
+            content = sys.stdin.read().strip()
+        if not content:
+            parser.print_help()
+            sys.exit(1)
+
+    from brainvault import db
+
+    db.init_db()
+    memory_id = db.save_memory(content, args.memory_type, project=args.project, source="cli")
+    project_tag = f" [{args.project}]" if args.project else ""
+    print(f"Saved {args.memory_type}{project_tag}: {memory_id}")
 
 
 def _cmd_forget() -> None:

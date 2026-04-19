@@ -54,10 +54,18 @@ _MINING_RULES: tuple[tuple[re.Pattern[str], int, str], ...] = (
     (re.compile(r"(?i)\btrade-?offs?\b"), 4, "decision"),
     (re.compile(r"(?i)\bwe (?:chose|picked|selected|went with|decided on)\b"), 4, "decision"),
     (re.compile(r"(?i)\b(?:design|architecture)\s+(?:choice|decision|rationale)\b"), 4, "decision"),
-    (re.compile(r"(?i)\brather than\b.+\b(?:we|I)\s+(?:use|chose|pick|went)", re.DOTALL), 4, "decision"),
+    (
+        re.compile(r"(?i)\brather than\b.+\b(?:we|I)\s+(?:use|chose|pick|went)", re.DOTALL),
+        4,
+        "decision",
+    ),
     (re.compile(r"(?i)\b(?:instead of|in favor of)\b"), 2, "decision"),
     (re.compile(r"(?i)\b(?:long-?term|scalability|maintainability)\b"), 2, "decision"),
-    (re.compile(r"(?i)\bbecause\b.+\b(?:performance|security|latency|cost|team)\b", re.DOTALL), 3, "decision"),
+    (
+        re.compile(r"(?i)\bbecause\b.+\b(?:performance|security|latency|cost|team)\b", re.DOTALL),
+        3,
+        "decision",
+    ),
     # Additional decision signals
     (re.compile(r"(?i)\b(?:opted|opting)\s+(?:for|to)\b"), 3, "decision"),
     (re.compile(r"(?i)\bthe\s+(?:reason|rationale)\s+(?:is|was|for)\b"), 4, "decision"),
@@ -118,7 +126,11 @@ def _assistant_text_from_cursor_event(event: dict) -> str:
 
 
 def _iter_assistant_message_texts(path: Path, source_agent: str) -> list[str]:
-    reader = _assistant_text_from_claude_event if source_agent == "claude_code" else _assistant_text_from_cursor_event
+    reader = (
+        _assistant_text_from_claude_event
+        if source_agent == "claude_code"
+        else _assistant_text_from_cursor_event
+    )
     out: list[str] = []
     try:
         with open(path, encoding="utf-8") as f:
@@ -335,11 +347,7 @@ def process_session(session_path: Path, adapter) -> int:
     for content, memory_type, score in mined:
         if db.is_hook_capture_duplicate(content, project, source="hook", source_agent=adapter.name):
             continue
-        tier = (
-            "high"
-            if score >= _MINED_HIGH_CONFIDENCE_SCORE
-            else "medium"
-        )
+        tier = "high" if score >= _MINED_HIGH_CONFIDENCE_SCORE else "medium"
         db.save_memory(
             content=content,
             memory_type=memory_type,

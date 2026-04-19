@@ -189,7 +189,11 @@ def search_memory(
     results = db.search_memories(query, project=project, limit=5)
 
     if not results:
-        return f"0 hits q={query!r}" if mcp_terse_enabled() else f'No relevant memory found for: "{query}"'
+        return (
+            f"0 hits q={query!r}"
+            if mcp_terse_enabled()
+            else f'No relevant memory found for: "{query}"'
+        )
 
     if mcp_terse_enabled():
         out: list[str] = [f"n={len(results)} q={query!r}"]
@@ -328,13 +332,19 @@ def get_project(name: str, limit: int = 20) -> str:
     memories = db.get_project_memories(name)
 
     if not project and not memories:
-        return f"missing {name!r}" if mcp_terse_enabled() else f"Project '{name}' not found. Use register_project to add it."
+        return (
+            f"missing {name!r}"
+            if mcp_terse_enabled()
+            else f"Project '{name}' not found. Use register_project to add it."
+        )
 
     if mcp_terse_enabled():
         chunks: list[str] = []
         if project:
             stack = (
-                json.loads(project["stack"]) if isinstance(project["stack"], str) else project["stack"]
+                json.loads(project["stack"])
+                if isinstance(project["stack"], str)
+                else project["stack"]
             )
             stk = ",".join(stack) if stack else "—"
             chunks.append(f"{project['name']}|{stk}|{project['description'][:120]}")
@@ -611,7 +621,11 @@ def update_memory(
     """
     db.init_db()
     if content is None and memory_type is None and project is None:
-        return "upd noop" if mcp_terse_enabled() else "No changes requested. Provide at least one of: content, memory_type, project."
+        return (
+            "upd noop"
+            if mcp_terse_enabled()
+            else "No changes requested. Provide at least one of: content, memory_type, project."
+        )
 
     if memory_type and memory_type not in db.VALID_MEMORY_TYPES:
         if mcp_terse_enabled():
@@ -653,8 +667,16 @@ def forget(memory_id: str = None, project: str = None) -> str:
     if project:
         count = db.delete_project_memories(project)
         if count:
-            return f"del proj:{project} ({count})" if mcp_terse_enabled() else f"Deleted {count} memories for project '{project}'."
-        return f"!proj {project[:16]}" if mcp_terse_enabled() else f"No memories found for project '{project}'."
+            return (
+                f"del proj:{project} ({count})"
+                if mcp_terse_enabled()
+                else f"Deleted {count} memories for project '{project}'."
+            )
+        return (
+            f"!proj {project[:16]}"
+            if mcp_terse_enabled()
+            else f"No memories found for project '{project}'."
+        )
     if memory_id:
         deleted = db.delete_memory(memory_id)
         if deleted:
@@ -741,7 +763,11 @@ def get_session_timeline(session_id: str, limit: int = 50) -> str:
     events_all = db.get_session_timeline(session_id)
 
     if not events_all:
-        return f"tl - {session_id[:12]}" if mcp_terse_enabled() else f"No events found for session '{session_id}'."
+        return (
+            f"tl - {session_id[:12]}"
+            if mcp_terse_enabled()
+            else f"No events found for session '{session_id}'."
+        )
 
     total = len(events_all)
     older_truncated = 0
