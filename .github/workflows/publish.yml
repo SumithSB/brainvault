@@ -60,4 +60,8 @@ jobs:
           path: dist/
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc  # v1.12.4
+        uses: pypa/gh-action-pypi-publish@6733eb7d741f0b11ec6a39b58540dab7590f9b7d  # v1.14.0
+        with:
+          # Attestation upload has caused intermittent 400s on PyPI; package metadata is fine.
+          attestations: false
+          verbose: true
