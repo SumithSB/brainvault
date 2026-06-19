@@ -20,6 +20,9 @@ VALID_MEMORY_TYPES: frozenset[str] = frozenset(
 SYSTEM_SOURCE_AGENT = "system"
 VALID_SOURCE_AGENTS: frozenset[str] = frozenset({"claude_code", "cursor", SYSTEM_SOURCE_AGENT})
 
+# Hook note prefix for Cursor user-query blobs (disabled by default in capture).
+CURSOR_QUERY_BLOB_PREFIX = "User queries in Cursor session"
+
 # Wait up to 30s on connect for the DB lock; retry busy handlers up to 30s per statement.
 _SQLITE_CONNECT_TIMEOUT_S = 30.0
 _SQLITE_BUSY_TIMEOUT_MS = 30000
@@ -390,6 +393,41 @@ def search_memories(
     return results
 
 
+def _memory_quality_sort_key(doc: dict) -> tuple[int, int, int]:
+    """Lower is better — used to boost high-signal memories in search ranking."""
+    content = doc.get("content") or ""
+    source = doc.get("source") or ""
+    mtype = doc.get("memory_type") or "note"
+    junk = (
+        1
+        if source == "hook" and content.startswith(CURSOR_QUERY_BLOB_PREFIX)
+        else 0
+    )
+    source_rank = {"agent": 0, "git": 1, "bootstrap": 2, "hook": 3}.get(source, 4)
+    type_rank = {"decision": 0, "pattern": 1, "project": 2, "profile": 3, "note": 4}.get(
+        mtype, 5
+    )
+    return (junk, source_rank, type_rank)
+
+
+_SEARCH_QUALITY_ORDER = """
+                        CASE WHEN m.content LIKE 'User queries in Cursor session%'
+                                  AND m.source = 'hook' THEN 1 ELSE 0 END,
+                        CASE m.source
+                            WHEN 'agent' THEN 0
+                            WHEN 'git' THEN 1
+                            WHEN 'bootstrap' THEN 2
+                            WHEN 'hook' THEN 3
+                            ELSE 4 END,
+                        CASE m.memory_type
+                            WHEN 'decision' THEN 0
+                            WHEN 'pattern' THEN 1
+                            WHEN 'project' THEN 2
+                            WHEN 'profile' THEN 3
+                            WHEN 'note' THEN 4 END,
+"""
+
+
 def _search_fts(query: str, project: str | None, limit: int) -> list[dict]:
     """FTS5 BM25 keyword search with project prioritisation and LIKE fallback."""
     with get_connection() as conn:
@@ -408,9 +446,10 @@ def _search_fts(query: str, project: str | None, limit: int) -> list[dict]:
                         CASE WHEN m.project = ? THEN 0
                              WHEN m.project IS NULL THEN 1
                              ELSE 2 END,
+                        {_SEARCH_QUALITY_ORDER}
                         bm25(memories_fts)
                     LIMIT ?
-                    """,
+                    """.format(_SEARCH_QUALITY_ORDER=_SEARCH_QUALITY_ORDER),
                     (safe_query, project, limit),
                 ).fetchall()
             else:
@@ -420,33 +459,46 @@ def _search_fts(query: str, project: str | None, limit: int) -> list[dict]:
                     FROM memories_fts
                     JOIN memories m ON memories_fts.rowid = m.rowid
                     WHERE memories_fts MATCH ?
-                    ORDER BY bm25(memories_fts)
+                    ORDER BY
+                        {_SEARCH_QUALITY_ORDER}
+                        bm25(memories_fts)
                     LIMIT ?
-                    """,
+                    """.format(_SEARCH_QUALITY_ORDER=_SEARCH_QUALITY_ORDER),
                     (safe_query, limit),
                 ).fetchall()
         except sqlite3.OperationalError:
             like = f"%{query}%"
+            like_fallback_order = """
+                        CASE WHEN content LIKE 'User queries in Cursor session%'
+                                  AND source = 'hook' THEN 1 ELSE 0 END,
+                        CASE source
+                            WHEN 'agent' THEN 0 WHEN 'git' THEN 1
+                            WHEN 'bootstrap' THEN 2 WHEN 'hook' THEN 3 ELSE 4 END,
+                        CASE memory_type
+                            WHEN 'decision' THEN 0 WHEN 'pattern' THEN 1
+                            WHEN 'project' THEN 2 WHEN 'profile' THEN 3
+                            WHEN 'note' THEN 4 END,
+                        created_at DESC"""
             if project:
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT *, 0 as rank FROM memories
                     WHERE (content LIKE ? OR keywords LIKE ?)
                     ORDER BY
                         CASE WHEN project = ? THEN 0
                              WHEN project IS NULL THEN 1
                              ELSE 2 END,
-                        created_at DESC
+                        {like_fallback_order}
                     LIMIT ?
                     """,
                     (like, like, project, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT *, 0 as rank FROM memories
                     WHERE content LIKE ? OR keywords LIKE ?
-                    ORDER BY created_at DESC
+                    ORDER BY {like_fallback_order}
                     LIMIT ?
                     """,
                     (like, like, limit),
@@ -524,7 +576,10 @@ def _rrf_merge(
         else:
             by_id[mid] = {**doc, "_vec_rank": rank}
 
-    ranked = sorted(scores.keys(), key=lambda mid: -scores[mid])
+    ranked = sorted(
+        scores.keys(),
+        key=lambda mid: (-scores[mid], *_memory_quality_sort_key(by_id[mid])),
+    )
     return [by_id[mid] for mid in ranked[:limit]]
 
 
@@ -690,6 +745,20 @@ def get_status() -> dict:
             """
         ).fetchone()[0]
 
+        cursor_query_blobs = conn.execute(
+            """
+            SELECT COUNT(*) FROM memories
+            WHERE source = 'hook' AND content LIKE ?
+            """,
+            (f"{CURSOR_QUERY_BLOB_PREFIX}%",),
+        ).fetchone()[0]
+        embedded = conn.execute("SELECT COUNT(*) FROM memory_vectors").fetchone()[0]
+        accessed = conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE IFNULL(access_count, 0) > 0"
+        ).fetchone()[0]
+
+    audit = audit_vault()
+
     return {
         "total_memories": total_memories,
         "by_type": by_type,
@@ -701,6 +770,12 @@ def get_status() -> dict:
         "last_session_memories": last_session[1] if last_session else 0,
         "open_decisions": open_decisions,
         "stale_projects": stale_projects,
+        "cursor_query_blobs": cursor_query_blobs,
+        "embedding_coverage_pct": audit["embedding_coverage_pct"],
+        "access_rate_pct": audit["access_rate_pct"],
+        "junk_hook_notes": audit["zero_access_hook_notes"],
+        "unregistered_project_count": len(audit["unregistered_projects"]),
+        "agent_vs_hook_ratio": audit["agent_vs_hook_ratio"],
     }
 
 
@@ -1439,3 +1514,262 @@ def get_code_context_data(
         "project": project,
         "query": query,
     }
+
+
+# --- Vault audit & prune -------------------------------------------------------
+
+_PROTECTED_MEMORY_TYPES = frozenset({"decision", "pattern", "profile"})
+_PROTECTED_SOURCES = frozenset({"agent"})
+
+
+def _is_protected_memory(row: sqlite3.Row | dict) -> bool:
+    """Memories that must never be auto-pruned."""
+    data = dict(row) if not isinstance(row, dict) else row
+    if data.get("source") in _PROTECTED_SOURCES:
+        return True
+    if data.get("memory_type") in _PROTECTED_MEMORY_TYPES:
+        return True
+    if int(data.get("access_count") or 0) > 0:
+        return True
+    return False
+
+
+def audit_vault() -> dict:
+    """Return vault health metrics for audit/prune decisions."""
+    with get_connection() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        by_source = {
+            r[0]: r[1]
+            for r in conn.execute(
+                "SELECT source, COUNT(*) FROM memories GROUP BY source"
+            ).fetchall()
+        }
+        by_type = {
+            r[0]: r[1]
+            for r in conn.execute(
+                "SELECT memory_type, COUNT(*) FROM memories GROUP BY memory_type"
+            ).fetchall()
+        }
+        cursor_query_blobs = conn.execute(
+            """
+            SELECT COUNT(*) FROM memories
+            WHERE source = 'hook'
+              AND content LIKE ?
+            """,
+            (f"{CURSOR_QUERY_BLOB_PREFIX}%",),
+        ).fetchone()[0]
+        zero_access_hook_notes = conn.execute(
+            """
+            SELECT COUNT(*) FROM memories
+            WHERE source = 'hook'
+              AND memory_type = 'note'
+              AND IFNULL(access_count, 0) = 0
+            """
+        ).fetchone()[0]
+        duplicate_hash_groups = conn.execute(
+            """
+            SELECT COUNT(*) FROM (
+                SELECT content_hash FROM memories
+                WHERE content_hash IS NOT NULL
+                GROUP BY content_hash
+                HAVING COUNT(*) > 1
+            )
+            """
+        ).fetchone()[0]
+        duplicate_hash_rows = conn.execute(
+            """
+            SELECT COALESCE(SUM(cnt - 1), 0) FROM (
+                SELECT COUNT(*) AS cnt FROM memories
+                WHERE content_hash IS NOT NULL
+                GROUP BY content_hash
+                HAVING COUNT(*) > 1
+            )
+            """
+        ).fetchone()[0]
+        embedded = conn.execute("SELECT COUNT(*) FROM memory_vectors").fetchone()[0]
+        accessed = conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE IFNULL(access_count, 0) > 0"
+        ).fetchone()[0]
+        open_decisions = conn.execute(
+            """
+            SELECT COUNT(*) FROM memories
+            WHERE memory_type = 'decision' AND outcome IS NULL
+            """
+        ).fetchone()[0]
+        registered = {r[0] for r in conn.execute("SELECT name FROM projects").fetchall()}
+        unregistered_rows = conn.execute(
+            """
+            SELECT project, COUNT(*) AS cnt FROM memories
+            WHERE project IS NOT NULL AND project != ''
+            GROUP BY project
+            ORDER BY cnt DESC
+            """
+        ).fetchall()
+        unregistered_projects = [
+            {"project": r[0], "memory_count": r[1]}
+            for r in unregistered_rows
+            if r[0] not in registered
+        ]
+        hook_note_count = conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE source = 'hook' AND memory_type = 'note'"
+        ).fetchone()[0]
+
+    agent_count = by_source.get("agent", 0)
+    hook_count = by_source.get("hook", 0)
+    high_signal = agent_count + by_source.get("git", 0)
+
+    return {
+        "total_memories": total,
+        "by_source": by_source,
+        "by_type": by_type,
+        "cursor_query_blobs": cursor_query_blobs,
+        "zero_access_hook_notes": zero_access_hook_notes,
+        "duplicate_hash_groups": duplicate_hash_groups,
+        "duplicate_hash_removable": duplicate_hash_rows,
+        "embedded_count": embedded,
+        "embedding_coverage_pct": round(100 * embedded / total, 1) if total else 0.0,
+        "accessed_count": accessed,
+        "access_rate_pct": round(100 * accessed / total, 1) if total else 0.0,
+        "open_decisions_without_outcome": open_decisions,
+        "unregistered_projects": unregistered_projects,
+        "agent_vs_hook_ratio": f"{agent_count}:{hook_count}",
+        "high_signal_share_pct": round(100 * high_signal / total, 1) if total else 0.0,
+        "hook_note_share_pct": round(100 * hook_note_count / total, 1) if total else 0.0,
+    }
+
+
+def _duplicate_hash_ids_to_prune(conn: sqlite3.Connection, *, keep: str = "newest") -> list[str]:
+    """Return memory IDs to delete for duplicate content_hash groups."""
+    groups = conn.execute(
+        """
+        SELECT content_hash FROM memories
+        WHERE content_hash IS NOT NULL
+        GROUP BY content_hash
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    to_delete: list[str] = []
+    for (content_hash,) in groups:
+        rows = conn.execute(
+            """
+            SELECT id, access_count, created_at FROM memories
+            WHERE content_hash = ?
+            """,
+            (content_hash,),
+        ).fetchall()
+        candidates = [dict(r) for r in rows if not _is_protected_memory(r)]
+        if len(candidates) <= 1:
+            continue
+        if keep == "access_count":
+            candidates.sort(
+                key=lambda r: (int(r["access_count"] or 0), r["created_at"] or ""),
+                reverse=True,
+            )
+        else:
+            candidates.sort(key=lambda r: r["created_at"] or "", reverse=True)
+        keeper_id = candidates[0]["id"]
+        for row in candidates[1:]:
+            if row["id"] != keeper_id:
+                to_delete.append(row["id"])
+    return to_delete
+
+
+def prune_memories(
+    *,
+    dry_run: bool = True,
+    cursor_query_blobs: bool = False,
+    duplicate_hash: bool = False,
+    duplicate_keep: str = "newest",
+    source: str | None = None,
+    memory_type: str | None = None,
+    content_pattern: str | None = None,
+    vacuum: bool = False,
+) -> dict:
+    """
+    Delete low-value memories matching prune rules.
+
+    Protected from all rules: source=agent, type in decision/pattern/profile,
+    access_count > 0.
+
+    Returns dict with keys: dry_run, deleted, candidate_ids, candidates_preview.
+    """
+    if duplicate_keep not in ("newest", "access_count"):
+        duplicate_keep = "newest"
+
+    ids_to_delete: set[str] = set()
+    deleted = 0
+    preview: list[sqlite3.Row] = []
+
+    with get_connection() as conn:
+        if cursor_query_blobs:
+            rows = conn.execute(
+                """
+                SELECT * FROM memories
+                WHERE source = 'hook'
+                  AND content LIKE ?
+                """,
+                (f"{CURSOR_QUERY_BLOB_PREFIX}%",),
+            ).fetchall()
+            for row in rows:
+                if not _is_protected_memory(row):
+                    ids_to_delete.add(row["id"])
+
+        if duplicate_hash:
+            for mid in _duplicate_hash_ids_to_prune(conn, keep=duplicate_keep):
+                ids_to_delete.add(mid)
+
+        if source or memory_type or content_pattern:
+            clauses: list[str] = []
+            params: list[str] = []
+            if source:
+                clauses.append("source = ?")
+                params.append(source)
+            if memory_type:
+                clauses.append("memory_type = ?")
+                params.append(memory_type)
+            if content_pattern:
+                clauses.append("content LIKE ?")
+                params.append(content_pattern)
+            where = " AND ".join(clauses)
+            rows = conn.execute(f"SELECT * FROM memories WHERE {where}", params).fetchall()
+            for row in rows:
+                if not _is_protected_memory(row):
+                    ids_to_delete.add(row["id"])
+
+        if ids_to_delete:
+            placeholders = ",".join("?" * len(ids_to_delete))
+            preview = conn.execute(
+                f"""
+                SELECT id, memory_type, source, project, substr(content, 1, 80) AS preview
+                FROM memories WHERE id IN ({placeholders})
+                LIMIT 20
+                """,
+                list(ids_to_delete),
+            ).fetchall()
+
+        if not dry_run and ids_to_delete:
+            for mid in ids_to_delete:
+                cur = conn.execute("DELETE FROM memories WHERE id = ?", (mid,))
+                deleted += cur.rowcount
+
+    if vacuum and not dry_run and deleted:
+        vacuum_db()
+
+    return {
+        "dry_run": dry_run,
+        "deleted": deleted if not dry_run else 0,
+        "candidate_count": len(ids_to_delete),
+        "candidate_ids": sorted(ids_to_delete),
+        "candidates_preview": [dict(r) for r in preview],
+    }
+
+
+def vacuum_db() -> None:
+    """Reclaim disk space after bulk deletes (must run outside a transaction)."""
+    path = get_db_path()
+    conn = sqlite3.connect(path, timeout=_SQLITE_CONNECT_TIMEOUT_S)
+    try:
+        conn.execute("VACUUM")
+        conn.commit()
+    finally:
+        conn.close()

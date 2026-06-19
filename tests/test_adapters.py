@@ -567,7 +567,7 @@ class TestCursorAdapter:
         assert "pytest" in ev.input_summary
         assert "1200ms" in ev.output_summary
 
-    def test_cursor_parse_session_file_extracts_user_queries(self, tmp_path):
+    def test_cursor_parse_session_file_extracts_user_queries(self, tmp_path, monkeypatch):
         sid = "11111111-1111-1111-1111-111111111111"
         transcript = (
             tmp_path
@@ -591,6 +591,8 @@ class TestCursorAdapter:
             encoding="utf-8",
         )
         adapter = CursorAdapter()
+        assert adapter.parse_session_file(transcript) == []
+        monkeypatch.setenv("BRAINVAULT_CURSOR_USER_QUERIES", "1")
         chunks = adapter.parse_session_file(transcript)
         assert len(chunks) == 1
         assert "User queries in Cursor session" in chunks[0]

@@ -257,3 +257,86 @@ def test_hook_capture_duplicate_uses_content_fingerprint():
     assert not db.is_hook_capture_duplicate(
         "unique other text", "p1", source="hook", source_agent="claude_code"
     )
+
+
+def test_audit_vault_counts_cursor_blobs():
+    db.save_memory(
+        "User queries in Cursor session abc:\n- hello world query text here",
+        "note",
+        project="p1",
+        source="hook",
+        source_agent="cursor",
+    )
+    db.save_memory("Real decision", "decision", project="p1", source="agent")
+    audit = db.audit_vault()
+    assert audit["cursor_query_blobs"] >= 1
+    assert audit["total_memories"] >= 2
+
+
+def test_prune_memories_dry_run_skips_protected():
+    db.save_memory(
+        "User queries in Cursor session x:\n- some user query text long enough",
+        "note",
+        project="p1",
+        source="hook",
+        source_agent="cursor",
+    )
+    agent_id = db.save_memory("Keep this agent decision", "decision", source="agent")
+    result = db.prune_memories(dry_run=True, cursor_query_blobs=True)
+    assert result["candidate_count"] >= 1
+    assert agent_id not in result["candidate_ids"]
+
+
+def test_prune_memories_deletes_cursor_blobs():
+    db.save_memory(
+        "User queries in Cursor session y:\n- delete me please long query",
+        "note",
+        project="p1",
+        source="hook",
+        source_agent="cursor",
+    )
+    result = db.prune_memories(dry_run=False, cursor_query_blobs=True)
+    assert result["deleted"] >= 1
+    audit = db.audit_vault()
+    assert audit["cursor_query_blobs"] == 0
+
+
+def test_search_boosts_agent_over_hook_note():
+    db.save_memory(
+        "User queries in Cursor session x:\n- async endpoints discussion here",
+        "note",
+        project="pluto",
+        source="hook",
+        source_agent="cursor",
+    )
+    db.save_memory(
+        "Use async endpoints for all FastAPI routes in pluto",
+        "pattern",
+        project="pluto",
+        source="agent",
+    )
+    results = db.search_memories("async endpoints pluto", project="pluto", hybrid=False)
+    assert len(results) >= 2
+    assert results[0]["source"] == "agent"
+
+
+def test_record_outcome_via_db():
+    mid = db.save_memory("Chose Redis for cache", "decision", project="p1")
+    assert db.record_outcome(mid, "Worked well in production", sentiment="positive")
+    with db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT outcome, outcome_sentiment FROM memories WHERE id = ?", (mid,)
+        ).fetchone()
+    assert row[0] == "Worked well in production"
+    assert row[1] == "positive"
+
+
+def test_prune_duplicate_hash_keeps_one():
+    content = "Exact duplicate content for hash test here"
+    db.save_memory(content, "note", project="p1", source="hook", source_agent="cursor")
+    db.save_memory(content, "note", project="p1", source="hook", source_agent="cursor")
+    result = db.prune_memories(dry_run=False, duplicate_hash=True, duplicate_keep="newest")
+    assert result["deleted"] >= 1
+    rows = db.search_memories("Exact duplicate content", hybrid=False)
+    assert len(rows) == 1
+

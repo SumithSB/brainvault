@@ -24,8 +24,9 @@ from brainvault.adapters._redact import redact_sensitive
 
 _MIN_MINED_CHARS = 120
 _MAX_MINED_CHARS = 6000
-_MAX_MINED_PER_SESSION = 20
-_MINED_SCORE_THRESHOLD = 3
+_MAX_MINED_PER_SESSION = 8
+_MINED_SCORE_THRESHOLD = 5
+_MINED_MEDIUM_SAVE_SCORE = 6
 _MINED_HIGH_CONFIDENCE_SCORE = 7
 _PREFIX_DEDUPE_CHARS = 200
 
@@ -335,8 +336,9 @@ def process_session(session_path: Path, adapter) -> int:
     for chunk in chunks:
         if db.is_hook_capture_duplicate(chunk, project, source="hook", source_agent=adapter.name):
             continue
+        safe_chunk = redact_sensitive(chunk, max_len=min(len(chunk), _MAX_MINED_CHARS))
         db.save_memory(
-            content=chunk,
+            content=safe_chunk,
             memory_type="note",
             project=project,
             source="hook",
@@ -345,6 +347,8 @@ def process_session(session_path: Path, adapter) -> int:
         saved += 1
 
     for content, memory_type, score in mined:
+        if score < _MINED_MEDIUM_SAVE_SCORE and score < _MINED_HIGH_CONFIDENCE_SCORE:
+            continue
         if db.is_hook_capture_duplicate(content, project, source="hook", source_agent=adapter.name):
             continue
         tier = "high" if score >= _MINED_HIGH_CONFIDENCE_SCORE else "medium"

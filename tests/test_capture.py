@@ -490,8 +490,32 @@ def test_process_session_dedupes_mined_against_continuation_chunk(tmp_path):
     assert saved == 1
 
 
-def test_process_session_cursor_user_queries(tmp_path):
+def test_process_session_cursor_user_queries_disabled_by_default(tmp_path):
     sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    session_file = (
+        tmp_path
+        / "projects"
+        / "Users-tester-Projects-myapp"
+        / "agent-transcripts"
+        / sid
+        / f"{sid}.jsonl"
+    )
+    session_file.parent.mkdir(parents=True)
+    long_q = "Plan the database migration and rollback strategy carefully. " * 5
+    _write_session(
+        session_file,
+        [{"role": "user", "message": {"content": [{"type": "text", "text": long_q}]}}],
+    )
+
+    saved = process_session(session_file, CursorAdapter())
+    assert saved == 0
+    rows = db.search_memories("migration")
+    assert rows == []
+
+
+def test_process_session_cursor_user_queries_opt_in(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAINVAULT_CURSOR_USER_QUERIES", "1")
+    sid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     session_file = (
         tmp_path
         / "projects"

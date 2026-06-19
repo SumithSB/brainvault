@@ -9,6 +9,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-19
+
+### Added
+
+- **`brainvault audit`** — vault quality metrics: junk candidates, embedding coverage, unregistered projects, agent/hook ratio.
+- **`brainvault prune`** — safe cleanup with `--dry-run` (default), `--yes` (apply defaults), filters (`--source`, `--type`, `--pattern`), `--duplicate-hash`, and `prune events --days N`.
+- **`brainvault record-outcome`** — CLI for closing the decision loop (`--sentiment positive|negative|mixed`).
+
+### Changed
+
+- **Cursor capture** — disabled raw "User queries in Cursor session" hook notes by default; set `BRAINVAULT_CURSOR_USER_QUERIES=1` to restore. Stop hook relies on assistant mining + explicit agent `save_memory`.
+- **Transcript mining** — raised score threshold (5), cap 8/session, skip medium-tier below score 6; note chunks redacted.
+- **Search** — boosts agent/git/decision/pattern over hook notes; deprioritizes legacy Cursor query blobs in ranking.
+- **`brainvault status` / `doctor`** — surface vault quality metrics and prune recommendations.
+- **Agent rules** — stronger proactive capture, post-ship pattern memories, maintenance cadence (`reflect`, `record_outcome`).
+
+### Fixed
+
+- **`prune_memories --vacuum`** — VACUUM runs outside the write transaction (avoids SQLite error).
+
 ## [0.1.1] - 2026-04-19
 
 ### Fixed

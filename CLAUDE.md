@@ -10,7 +10,7 @@ Personal memory layer for Claude Code and Cursor. SQLite + FTS5 + optional seman
 ## Structure
 - `brainvault/db.py` — storage layer: SQLite schema, FTS5, vector search, reflection queries
 - `brainvault/mcp_server.py` — 12 MCP tools served via stdio
-- `brainvault/cli.py` — CLI entry point (20 commands)
+- `brainvault/cli.py` — CLI entry point (23 commands)
 - `brainvault/capture.py` — Stop hook entry (maintenance + session save); iterates adapters for recent transcript JSONL
 - `brainvault/tool_capture.py` — Tool-hook stdin reader; dispatches payloads to adapters (`owns_payload` / `event_from_payload`); <20 ms per event, never crashes
 - `brainvault/adapters/` — per-host integration layer.
@@ -56,6 +56,9 @@ search          Search memories from terminal
 status          Vault health at a glance
 update          Edit a memory by ID
 reflect         Open decisions, cross-project patterns, outcome sentiment
+audit           Vault quality metrics (junk, coverage, unregistered projects)
+prune           Remove low-value memories (--dry-run default; --yes safe cleanup)
+record-outcome  Record result of a past decision (--sentiment)
 forget          Delete a memory by ID
 embed           Backfill semantic embeddings
 graph           Generate HTML brain graph (--open to launch browser)

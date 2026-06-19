@@ -580,3 +580,26 @@ class TestSaveCommand:
         monkeypatch.setattr(sys, "stdin", io.StringIO(""))
         with pytest.raises(SystemExit):
             cli_main()
+
+
+class TestAuditPrune:
+    def test_audit_command(self, monkeypatch, capsys):
+        db.save_memory("audit test memory", "note")
+        monkeypatch.setattr(sys, "argv", ["brainvault", "audit"])
+        cli_main()
+        out = capsys.readouterr().out
+        assert "Brainvault audit" in out
+        assert "Total memories" in out
+
+    def test_prune_dry_run(self, monkeypatch, capsys):
+        db.save_memory(
+            "User queries in Cursor session z:\n- prune dry run test query",
+            "note",
+            source="hook",
+            source_agent="cursor",
+        )
+        monkeypatch.setattr(sys, "argv", ["brainvault", "prune", "--dry-run"])
+        cli_main()
+        out = capsys.readouterr().out
+        assert "Would delete" in out
+

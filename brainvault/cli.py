@@ -68,6 +68,9 @@ def main() -> None:
     elif cmd == "reflect":
         _cmd_reflect()
 
+    elif cmd == "record-outcome":
+        _cmd_record_outcome()
+
     elif cmd == "forget":
         _cmd_forget()
 
@@ -91,6 +94,12 @@ def main() -> None:
 
     elif cmd == "activity":
         _cmd_activity()
+
+    elif cmd == "audit":
+        _cmd_audit()
+
+    elif cmd == "prune":
+        _cmd_prune()
 
     else:
         print(f"Unknown command: {cmd}")
@@ -120,11 +129,14 @@ def _print_usage() -> None:
     print("  update     Edit an existing memory by ID")
     print("  graph      Generate HTML brain graph of all memories")
     print("  reflect    Surface cross-project patterns and open decisions")
+    print("  record-outcome  Record result of a past decision (--sentiment positive|negative|mixed)")
     print("  save       Quickly save a memory from the terminal (--type, --project)")
     print("  forget     Delete a memory by ID, or all memories for a project (--project <name>)")
     print("  stats      Show memory statistics")
     print("  sessions   List recent agent sessions and activity (tagged by host)")
     print("  activity   Show full event timeline for a specific session")
+    print("  audit      Vault quality metrics: junk candidates, duplicates, coverage")
+    print("  prune      Remove low-value memories (--dry-run default; --yes to apply)")
 
 
 def _parse_bootstrap_host_flag(argv: list[str]) -> frozenset[str] | None:
@@ -419,6 +431,28 @@ def _cmd_doctor() -> None:
         check("git on PATH", True, shutil.which("git") or "")
     else:
         check("git on PATH", False, "git not found — git-scan + index-repo will be unavailable")
+
+    # 6. Vault quality (informational)
+    try:
+        db.init_db()
+        audit = db.audit_vault()
+        junk = audit["cursor_query_blobs"] + audit["duplicate_hash_removable"]
+        if junk:
+            check(
+                "Vault junk candidates",
+                True,
+                f"{junk} rows pruneable — run 'brainvault audit' / 'brainvault prune --dry-run'",
+            )
+        else:
+            check("Vault junk candidates", True, "none detected")
+        if audit["embedding_coverage_pct"] < 80 and audit["total_memories"] > 0:
+            check(
+                "Embedding coverage",
+                True,
+                f"{audit['embedding_coverage_pct']}% — run 'brainvault embed' (optional)",
+            )
+    except Exception as e:
+        check("Vault quality audit", False, str(e))
 
     # Render + exit code
     failed = 0
@@ -1164,6 +1198,20 @@ def _cmd_status() -> None:
     if s["stale_projects"]:
         print(f"  Stale projects: {s['stale_projects']}  (active but idle >30 days)")
 
+    print("\n  Vault quality:")
+    print(f"    Embedding coverage : {s.get('embedding_coverage_pct', 0)}%")
+    print(f"    Access rate        : {s.get('access_rate_pct', 0)}%")
+    print(f"    Agent vs hook      : {s.get('agent_vs_hook_ratio', 'n/a')}")
+    if s.get("cursor_query_blobs"):
+        print(f"    Cursor query blobs : {s['cursor_query_blobs']}  (run 'brainvault prune --yes')")
+    if s.get("junk_hook_notes"):
+        print(f"    Zero-access hook notes: {s['junk_hook_notes']}")
+    if s.get("unregistered_project_count"):
+        print(
+            f"    Unregistered tags  : {s['unregistered_project_count']} projects "
+            "(run 'brainvault audit')"
+        )
+
 
 def _cmd_update() -> None:
     """Edit an existing memory by ID."""
@@ -1322,6 +1370,42 @@ def _cmd_reflect() -> None:
 
     if not any([open_decisions, patterns, stale, hot, sentiment]):
         print("Not enough data yet for meaningful reflection. Keep building memories.")
+
+
+def _cmd_record_outcome() -> None:
+    """Record the outcome of a past decision memory."""
+    args = sys.argv[2:]
+    if len(args) < 2:
+        print("Usage: brainvault record-outcome <memory-id> <outcome text>")
+        print("       brainvault record-outcome <id> <text> --sentiment positive|negative|mixed")
+        sys.exit(1)
+
+    memory_id = args[0]
+    sentiment: str | None = None
+    outcome_parts: list[str] = []
+    i = 1
+    while i < len(args):
+        if args[i] == "--sentiment" and i + 1 < len(args):
+            sentiment = args[i + 1]
+            i += 2
+        else:
+            outcome_parts.append(args[i])
+            i += 1
+
+    outcome = " ".join(outcome_parts).strip()
+    if not outcome:
+        print("Error: outcome text is required.")
+        sys.exit(1)
+
+    from brainvault import db
+
+    db.init_db()
+    ok = db.record_outcome(memory_id, outcome, sentiment=sentiment)
+    if ok:
+        print(f"Recorded outcome for decision {memory_id}.")
+    else:
+        print(f"Could not record outcome — memory {memory_id} not found or not a decision.")
+        sys.exit(1)
 
 
 def _cmd_save() -> None:
@@ -1531,3 +1615,151 @@ def _cmd_activity() -> None:
         out = ev.get("output_summary", "")
         out_str = f"  → {out}" if out else ""
         print(f"  {ts}  {tool:<16}  {summary}{out_str}")
+
+
+def _cmd_audit() -> None:
+    """Show vault quality metrics and junk candidates."""
+    from brainvault import db
+
+    db.init_db()
+    audit = db.audit_vault()
+
+    print("Brainvault audit\n")
+    print(f"  Total memories:        {audit['total_memories']}")
+    print(f"  By source:               {audit['by_source']}")
+    print(f"  By type:                 {audit['by_type']}")
+    print(f"  Agent vs hook:           {audit['agent_vs_hook_ratio']}")
+    print(f"  High-signal share:       {audit['high_signal_share_pct']}%")
+    print(f"  Hook note share:         {audit['hook_note_share_pct']}%")
+    print(f"  Embedding coverage:      {audit['embedding_coverage_pct']}%")
+    print(f"  Ever accessed:           {audit['accessed_count']} ({audit['access_rate_pct']}%)")
+    print()
+    print("  Junk candidates:")
+    print(f"    Cursor query blobs:    {audit['cursor_query_blobs']}")
+    print(f"    Zero-access hook notes:{audit['zero_access_hook_notes']}")
+    print(
+        f"    Duplicate hash groups: {audit['duplicate_hash_groups']} "
+        f"({audit['duplicate_hash_removable']} removable rows)"
+    )
+    print(f"  Open decisions (no outcome): {audit['open_decisions_without_outcome']}")
+    if audit["unregistered_projects"]:
+        print("\n  Unregistered projects (top):")
+        for row in audit["unregistered_projects"][:10]:
+            print(f"    {row['project']}: {row['memory_count']} memories")
+    print("\n  Run: brainvault prune --dry-run   (preview safe cleanup)")
+    print("       brainvault prune --yes         (apply safe defaults)")
+
+
+def _parse_prune_args(argv: list[str]) -> dict:
+    """Parse brainvault prune flags."""
+    opts: dict = {
+        "dry_run": True,
+        "apply_defaults": False,
+        "cursor_query_blobs": False,
+        "duplicate_hash": False,
+        "duplicate_keep": "newest",
+        "source": None,
+        "memory_type": None,
+        "content_pattern": None,
+        "vacuum": False,
+        "events_days": None,
+    }
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("--dry-run", "-n"):
+            opts["dry_run"] = True
+        elif arg in ("--yes", "-y"):
+            opts["dry_run"] = False
+            opts["apply_defaults"] = True
+        elif arg == "--cursor-query-blobs":
+            opts["cursor_query_blobs"] = True
+        elif arg == "--duplicate-hash":
+            opts["duplicate_hash"] = True
+        elif arg == "--duplicate-keep" and i + 1 < len(argv):
+            opts["duplicate_keep"] = argv[i + 1]
+            i += 1
+        elif arg == "--source" and i + 1 < len(argv):
+            opts["source"] = argv[i + 1]
+            i += 1
+        elif arg == "--type" and i + 1 < len(argv):
+            opts["memory_type"] = argv[i + 1]
+            i += 1
+        elif arg == "--pattern" and i + 1 < len(argv):
+            opts["content_pattern"] = argv[i + 1]
+            i += 1
+        elif arg == "--vacuum":
+            opts["vacuum"] = True
+        elif arg == "events":
+            if i + 1 < len(argv) and argv[i + 1] == "--days" and i + 2 < len(argv):
+                opts["events_days"] = int(argv[i + 2])
+                i += 2
+            else:
+                opts["events_days"] = 90
+        i += 1
+    return opts
+
+
+def _cmd_prune() -> None:
+    """Prune low-value memories or old session events."""
+    from brainvault import db
+
+    args = sys.argv[2:]
+    if not args:
+        print("Usage: brainvault prune [--dry-run | --yes] [options]")
+        print("       brainvault prune events [--days N]")
+        print()
+        print("Options:")
+        print("  --yes                 Apply safe default cleanup (query blobs + dupes)")
+        print("  --cursor-query-blobs  Remove Cursor user-query hook notes")
+        print("  --duplicate-hash      Remove exact content_hash duplicates")
+        print("  --duplicate-keep newest|access_count")
+        print("  --source SOURCE       Filter by source (hook, git, agent, …)")
+        print("  --type TYPE           Filter by memory_type")
+        print("  --pattern '%LIKE%'    Filter by content LIKE pattern")
+        print("  --vacuum              Run VACUUM after delete")
+        sys.exit(1)
+
+    db.init_db()
+    opts = _parse_prune_args(args)
+
+    if opts["events_days"] is not None:
+        if opts["dry_run"] and not opts["apply_defaults"]:
+            print(f"Would prune session_events older than {opts['events_days']} days.")
+            print("Re-run with --yes to apply.")
+            return
+        deleted = db.prune_old_events(days=opts["events_days"])
+        print(f"Pruned {deleted} session_events older than {opts['events_days']} days.")
+        return
+
+    cursor_blobs = opts["cursor_query_blobs"]
+    dupes = opts["duplicate_hash"]
+    if opts["apply_defaults"]:
+        cursor_blobs = True
+        dupes = True
+    elif not cursor_blobs and not dupes and not (
+        opts["source"] or opts["memory_type"] or opts["content_pattern"]
+    ):
+        cursor_blobs = True
+        dupes = True
+
+    result = db.prune_memories(
+        dry_run=opts["dry_run"],
+        cursor_query_blobs=cursor_blobs,
+        duplicate_hash=dupes,
+        duplicate_keep=opts["duplicate_keep"],
+        source=opts["source"],
+        memory_type=opts["memory_type"],
+        content_pattern=opts["content_pattern"],
+        vacuum=opts["vacuum"],
+    )
+
+    mode = "Would delete" if result["dry_run"] else "Deleted"
+    print(f"{mode} {result['candidate_count']} memories.")
+    if result["candidates_preview"]:
+        print("\nSample:")
+        for row in result["candidates_preview"][:5]:
+            proj = row.get("project") or "global"
+            print(f"  [{row['memory_type']}|{row['source']}|{proj}] {row['preview']}…")
+    if result["dry_run"] and result["candidate_count"]:
+        print("\nRe-run with --yes to apply.")

@@ -182,15 +182,19 @@ def test_bootstrap_missing_projects_dir(tmp_path, monkeypatch):
 
 
 def test_bootstrap_cursor_saves_transcript_memories(tmp_path, monkeypatch):
-    """Cursor bulk path reuses capture.process_session (source=hook, source_agent=cursor)."""
+    """Cursor bulk path reuses capture.process_session (assistant mining, source=hook)."""
     projects_root = tmp_path / "cursor_projects"
     sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     workspace = projects_root / "Users-me-Projects-demo"
     transcript = workspace / "agent-transcripts" / sid / f"{sid}.jsonl"
     transcript.parent.mkdir(parents=True)
-    long_q = "Review this codebase for security issues and performance. " * 4
+    body = (
+        "The root cause of the security regression was missing input validation on the upload "
+        "endpoint. The fix was to add size limits and MIME checks before writing to disk. "
+        "We verified with integration tests against malicious payloads."
+    )
     transcript.write_text(
-        json.dumps({"role": "user", "message": {"content": [{"type": "text", "text": long_q}]}})
+        json.dumps({"role": "assistant", "message": {"content": [{"type": "text", "text": body}]}})
         + "\n",
         encoding="utf-8",
     )

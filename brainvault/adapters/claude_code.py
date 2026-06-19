@@ -53,9 +53,12 @@ Personal memory via `brainvault` MCP (persists across sessions). **Never ask** b
     - You explained WHY a library/tool/pattern was chosen over alternatives
     - The user corrected your approach, changed direction, or overrode a decision
     - You resolved an ambiguity by making a concrete choice
-  Do NOT defer to the Stop hook — it mines raw text; you capture structured reasoning. Examples:
+  Do NOT defer to the Stop hook — it mines assistant paragraphs only (no raw Cursor query dumps); you capture structured reasoning. Examples:
   - "Used WAL mode because concurrent readers hit lock contention" → `save_memory(decision, ...)`
   - "Bug was missing await in async __aexit__" → `save_memory(pattern, ...)`
+  - Shipped JWT auth + API surface for a service → one `save_memory(pattern, ...)` runbook beats 20 hook notes
+
+**After shipping a feature:** save one structured `pattern` memory (endpoints, env vars, run/deploy steps) — the pluto-api master-context style — not a transcript summary.
 
 **Before substantive work:** `search_memory` when the task could overlap prior context — their
 stack, tools, repo areas, team conventions, or anything they've already brought up. Prefer a
@@ -68,7 +71,9 @@ quick search before deep implementation, refactors, or debugging when relevant n
 On "do you remember…" / "we discussed…" → `search_memory` first.
 
 **Outcomes:** After shipped work or reversals → `record_outcome` (sentiment: positive /
-negative / mixed).
+negative / mixed). When `reflect()` shows open decisions, close them with outcomes in the same session when you know the result.
+
+**Maintenance:** If the user asks to clean up or review the vault, suggest `brainvault audit`, `brainvault prune --dry-run`, and recording outcomes on stale decisions.
 
 **Meta:** Patterns, gaps, open decisions → `reflect()`.
 {ENGRAM_END_MARKER}

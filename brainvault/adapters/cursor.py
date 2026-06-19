@@ -13,6 +13,7 @@ Cursor host integration:
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -43,7 +44,7 @@ _POSTTOOL_MATCHER = r"Read|Grep|Task|Delete|MCP:.*"
 
 # Inserted before ENGRAM_END_MARKER so it stays inside the managed block (upgrade-safe).
 _CURSOR_MANAGED_NOTE = """
-**Cursor host:** Brainvault MCP tools (`get_my_context`, `search_memory`, …) only run when this session **can call MCP** (e.g. **Agent** / tool-using agent — UI labels vary by Cursor version). Plain chat with tools disabled cannot invoke MCP even if rules load. Confirm **brainvault** is enabled for this chat in MCP settings. For **old** Cursor transcripts on disk, run `brainvault bootstrap --host cursor` once — the Stop hook only picks **recent** JSONL by modification time.
+**Cursor host:** Brainvault MCP tools (`get_my_context`, `search_memory`, …) only run when this session **can call MCP** (e.g. **Agent** / tool-using agent — UI labels vary by Cursor version). Plain chat with tools disabled cannot invoke MCP even if rules load. Confirm **brainvault** is enabled for this chat in MCP settings. Stop-hook capture no longer saves raw "User queries in Cursor session" notes — rely on explicit `save_memory` and assistant mining. For **old** Cursor transcripts on disk, run `brainvault bootstrap --host cursor` once — the Stop hook only picks **recent** JSONL by modification time.
 """
 
 _CURSOR_HOOK_EVENTS: tuple[tuple[str, str, str | None], ...] = (
@@ -389,6 +390,18 @@ class CursorAdapter(AgentAdapter):
         return decode_workspace_slug(workspace_dir)
 
     def parse_session_file(self, path: Path) -> list[str]:
+        """Return session chunks for hook capture.
+
+        Cursor user-query aggregation is disabled by default (noisy). Set
+        ``BRAINVAULT_CURSOR_USER_QUERIES=1`` to restore legacy behavior.
+        """
+        if os.environ.get("BRAINVAULT_CURSOR_USER_QUERIES", "").strip().lower() not in (
+            "1",
+            "true",
+            "yes",
+        ):
+            return []
+
         queries: list[str] = []
         try:
             with open(path, encoding="utf-8") as f:
