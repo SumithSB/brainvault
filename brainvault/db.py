@@ -431,7 +431,7 @@ def _search_fts(query: str, project: str | None, limit: int) -> list[dict]:
         try:
             if project:
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT m.*, bm25(memories_fts) as rank
                     FROM memories_fts
                     JOIN memories m ON memories_fts.rowid = m.rowid
@@ -443,12 +443,12 @@ def _search_fts(query: str, project: str | None, limit: int) -> list[dict]:
                         {_SEARCH_QUALITY_ORDER}
                         bm25(memories_fts)
                     LIMIT ?
-                    """.format(_SEARCH_QUALITY_ORDER=_SEARCH_QUALITY_ORDER),
+                    """,
                     (safe_query, project, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT m.*, bm25(memories_fts) as rank
                     FROM memories_fts
                     JOIN memories m ON memories_fts.rowid = m.rowid
@@ -457,7 +457,7 @@ def _search_fts(query: str, project: str | None, limit: int) -> list[dict]:
                         {_SEARCH_QUALITY_ORDER}
                         bm25(memories_fts)
                     LIMIT ?
-                    """.format(_SEARCH_QUALITY_ORDER=_SEARCH_QUALITY_ORDER),
+                    """,
                     (safe_query, limit),
                 ).fetchall()
         except sqlite3.OperationalError:
@@ -745,10 +745,6 @@ def get_status() -> dict:
             WHERE source = 'hook' AND content LIKE ?
             """,
             (f"{CURSOR_QUERY_BLOB_PREFIX}%",),
-        ).fetchone()[0]
-        embedded = conn.execute("SELECT COUNT(*) FROM memory_vectors").fetchone()[0]
-        accessed = conn.execute(
-            "SELECT COUNT(*) FROM memories WHERE IFNULL(access_count, 0) > 0"
         ).fetchone()[0]
 
     audit = audit_vault()
