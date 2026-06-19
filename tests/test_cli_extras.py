@@ -602,4 +602,3 @@ class TestAuditPrune:
         cli_main()
         out = capsys.readouterr().out
         assert "Would delete" in out
-

@@ -398,15 +398,9 @@ def _memory_quality_sort_key(doc: dict) -> tuple[int, int, int]:
     content = doc.get("content") or ""
     source = doc.get("source") or ""
     mtype = doc.get("memory_type") or "note"
-    junk = (
-        1
-        if source == "hook" and content.startswith(CURSOR_QUERY_BLOB_PREFIX)
-        else 0
-    )
+    junk = 1 if source == "hook" and content.startswith(CURSOR_QUERY_BLOB_PREFIX) else 0
     source_rank = {"agent": 0, "git": 1, "bootstrap": 2, "hook": 3}.get(source, 4)
-    type_rank = {"decision": 0, "pattern": 1, "project": 2, "profile": 3, "note": 4}.get(
-        mtype, 5
-    )
+    type_rank = {"decision": 0, "pattern": 1, "project": 2, "profile": 3, "note": 4}.get(mtype, 5)
     return (junk, source_rank, type_rank)
 
 

@@ -339,4 +339,3 @@ def test_prune_duplicate_hash_keeps_one():
     assert result["deleted"] >= 1
     rows = db.search_memories("Exact duplicate content", hybrid=False)
     assert len(rows) == 1
-

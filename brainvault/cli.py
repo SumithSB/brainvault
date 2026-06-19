@@ -129,7 +129,9 @@ def _print_usage() -> None:
     print("  update     Edit an existing memory by ID")
     print("  graph      Generate HTML brain graph of all memories")
     print("  reflect    Surface cross-project patterns and open decisions")
-    print("  record-outcome  Record result of a past decision (--sentiment positive|negative|mixed)")
+    print(
+        "  record-outcome  Record result of a past decision (--sentiment positive|negative|mixed)"
+    )
     print("  save       Quickly save a memory from the terminal (--type, --project)")
     print("  forget     Delete a memory by ID, or all memories for a project (--project <name>)")
     print("  stats      Show memory statistics")
@@ -1737,8 +1739,10 @@ def _cmd_prune() -> None:
     if opts["apply_defaults"]:
         cursor_blobs = True
         dupes = True
-    elif not cursor_blobs and not dupes and not (
-        opts["source"] or opts["memory_type"] or opts["content_pattern"]
+    elif (
+        not cursor_blobs
+        and not dupes
+        and not (opts["source"] or opts["memory_type"] or opts["content_pattern"])
     ):
         cursor_blobs = True
         dupes = True
