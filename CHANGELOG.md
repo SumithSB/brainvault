@@ -9,6 +9,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-19
+
+### Fixed
+
+- **PyPI publish** — bump to 0.2.2; PyPI permanently reserves the `0.2.1`
+  filename (it was uploaded then deleted), so `0.2.1` could never be
+  republished regardless of workflow config. The publish workflow itself was
+  already healthy (build + twine check + OIDC trusted publishing all pass).
+
 ## [0.2.1] - 2026-06-19
 
 
