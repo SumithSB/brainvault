@@ -16,7 +16,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - **CI** — `ruff format` on v0.2.0 modules (`cli.py`, `db.py`, tests).
 - **`db.py`** — ruff lint: f-strings for FTS search ordering; drop unused `get_stats` queries covered by `audit_vault()`.
-- **PyPI publish** — upgrade `gh-action-pypi-publish` to v1.14.0; disable attestations upload (fixes 400 on release).
+- **PyPI publish** — disable attestations upload (fixes 400 on 0.2.1); keep `gh-action-pypi-publish` v1.12.4 (v1.14.0 commit lacks ghcr.io image).
 
 ## [0.2.0] - 2026-06-19
 
