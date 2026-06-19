@@ -1,0 +1,7 @@
+# Re-attribute Cursor agent co-author trailers to the repo owner.
+# GitHub walks orphan commits and Co-authored-by lines when building the
+# Contributors sidebar; .mailmap is display-only and does not rewrite history.
+# Reference: https://git-scm.com/docs/gitmailmap
+
+SumithSB <sumith2620@gmail.com> Cursor <cursoragent@cursor.com>
+SumithSB <sumith2620@gmail.com> <cursoragent@cursor.com>
