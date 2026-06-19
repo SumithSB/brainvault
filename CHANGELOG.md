@@ -9,9 +9,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-19
+
+### Changed
+
+- Removed **`.mailmap`** — GitHub contributor attribution workaround no longer shipped in the repo.
+
+### Fixed
+
+- **CI** — `ruff format` on v0.2.0 modules (`cli.py`, `db.py`, tests).
+- **`db.py`** — ruff lint: f-strings for FTS search ordering; drop unused `get_stats` queries covered by `audit_vault()`.
+
 ## [0.2.0] - 2026-06-19
 
 ### Added
+
+- **`.githooks/commit-msg`** — strips Cursor `Co-authored-by` / `Made-with` trailers on commit (enable with `git config core.hooksPath .githooks`).
 
 - **`brainvault audit`** — vault quality metrics: junk candidates, embedding coverage, unregistered projects, agent/hook ratio.
 - **`brainvault prune`** — safe cleanup with `--dry-run` (default), `--yes` (apply defaults), filters (`--source`, `--type`, `--pattern`), `--duplicate-hash`, and `prune events --days N`.
