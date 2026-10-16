@@ -13,7 +13,18 @@ _REDACT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 
 
 def redact_sensitive(text: str, max_len: int = 500) -> str:
-    t = text[:max_len]
+    """Redact secrets, then cap length.
+
+    Slicing to ``max_len`` first can cut an ``sk-`` key below the 20-character
+    minimum, so a prefix of the secret is kept. Finish the token that begins
+    inside the cap (secrets are non-whitespace), match, then truncate.
+    """
+    if max_len < 0:
+        max_len = 0
+    end = min(len(text), max_len)
+    while end < len(text) and not text[end].isspace():
+        end += 1
+    t = text[:end]
     for pat, sub in _REDACT_PATTERNS:
         t = pat.sub(sub, t)
-    return t
+    return t[:max_len]

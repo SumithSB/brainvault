@@ -65,6 +65,16 @@ def test_redact_sensitive_sk_prefix():
     assert "sk-abc" not in _redact_sensitive("token sk-abcdefghijklmnopqrstuvwxyz here")
 
 
+def test_redact_sensitive_sk_key_straddling_max_len():
+    """A length cap must not slice an sk- key before the pattern can match."""
+    key = "sk-" + ("a" * 24)
+    text = ("x" * 90) + key + " trailing"
+    result = _redact_sensitive(text, max_len=100)
+    assert key not in result
+    assert "sk-" not in result
+    assert len(result) <= 100
+
+
 def test_summarize_input_todowrite():
     todos = [
         {"content": "task1", "status": "pending"},

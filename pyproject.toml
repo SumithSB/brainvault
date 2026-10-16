@@ -34,7 +34,8 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "mcp>=1.0.0",
+    # mcp 2.x renamed FastMCP and breaks this server; stay on the 1.x line.
+    "mcp>=1.0.0,<2",
 ]
 
 [project.urls]
