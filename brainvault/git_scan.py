@@ -444,15 +444,47 @@ def discover_repos(
     max_depth: int = 6,
     progress: bool = True,
 ) -> list[Path]:
-    """
-    Walk the directory tree under root and return all git repository paths found.
+    """Find git checkouts under ``root`` for ``bootstrap-git`` and install seeding.
 
-    A directory is a git repo if it contains a '.git' subdirectory.
-    Skips directories in _DISCOVER_SKIP and hidden dirs (starting with '.')
-    to avoid traversing noise like node_modules, venvs, and macOS system dirs.
+    ``root`` is expanded (``~``) and resolved, then walked depth-first. ``root``
+    itself is depth 0. A directory is a repository when it contains a ``.git``
+    *directory* and ``git rev-parse --git-dir`` prints a path. The walk does not
+    enter a repository after recording it, so nested checkouts inside it are
+    left out. A ``.git`` file (linked worktrees and some submodules) is not a
+    repository marker; children of that directory are still eligible.
 
-    If progress=True and stdout is a TTY, prints a live counter while scanning.
-    Returns paths sorted alphabetically.
+    Args:
+        root: Directory to scan. A missing path or any non-directory yields
+            an empty list.
+        max_depth: Deepest level to visit, inclusive. Defaults to 6. Children
+            of a directory at this depth are not entered. A negative value
+            visits nothing, including ``root``.
+        progress: When true and stdout is a TTY, overwrite a status line every
+            50 directories listed, then clear that line if at least 50
+            directories were listed.
+
+    Returns:
+        Absolute paths of the repositories found, sorted lexicographically.
+
+    Skipped directories:
+        Child directories are not entered when the name starts with ``.`` or
+        is in ``_DISCOVER_SKIP``. Beyond hidden names, that set is
+        ``node_modules``, ``vendor``, ``bower_components``, ``Pods``, ``venv``,
+        ``env``, ``__pycache__``, ``miniconda3``, ``anaconda3``, ``miniforge3``,
+        ``mambaforge``, ``micromamba``, ``dist``, ``build``, ``target``,
+        ``out``, ``_build``, ``DerivedData``, ``Library``, ``Applications``,
+        ``System``, ``Volumes``, ``Trash``, ``tmp``, and ``temp``. Dotted
+        members of the same set (tool caches, ``.venv``, IDE folders,
+        ``.docker``) are already covered by the hidden-name rule. ``root`` is
+        still examined when its own name matches either rule.
+
+    Failure behaviour:
+        ``PermissionError`` while listing a directory skips that directory and
+        its descendants. A git probe that returns no output (command failed, or
+        ``git`` is not installed) omits that candidate. Any other exception
+        raised by the probe is swallowed and the candidate is omitted. Other
+        listing errors, such as the directory disappearing mid-walk, propagate
+        to the caller.
     """
     root = root.expanduser().resolve()
     if not root.is_dir():
