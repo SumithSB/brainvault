@@ -25,6 +25,7 @@ from brainvault.git_scan import (
     _refine_memory_type_from_body,
     _resolve_repo_path,
     _run_git,
+    discover_repos,
     scan_repo,
 )
 
@@ -446,6 +447,87 @@ def test_scan_repo_raises_on_non_git_dir(tmp_path):
     since = datetime(2023, 1, 1, tzinfo=timezone.utc)
     with pytest.raises(ValueError, match="not a git repository"):
         scan_repo(tmp_path, project="proj", since=since, limit=100, verbose=False)
+
+
+# ---------------------------------------------------------------------------
+# discover_repos
+# ---------------------------------------------------------------------------
+
+
+def _mark_git_repo(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / ".git").mkdir()
+    return path
+
+
+def test_discover_repos_non_directory_returns_empty(tmp_path):
+    assert discover_repos(tmp_path / "does-not-exist", progress=False) == []
+
+    notes = tmp_path / "notes.txt"
+    notes.write_text("hello", encoding="utf-8")
+    assert discover_repos(notes, progress=False) == []
+
+
+def test_discover_repos_finds_nested_repos_and_skips_noise(tmp_path):
+    root = tmp_path.resolve()
+    alpha = _mark_git_repo(root / "alpha")
+    zeta = _mark_git_repo(root / "projects" / "zeta")
+    # A repo is a leaf: clones checked into it are not separate discoveries.
+    _mark_git_repo(alpha / "vendor" / "lib")
+    _mark_git_repo(root / "node_modules" / "leftpad")
+    _mark_git_repo(root / "venv" / "src" / "pkg")
+    _mark_git_repo(root / ".cache" / "repo")
+    # A .git file (worktree gitdir pointer) is not a repository directory.
+    worktree = root / "worktree"
+    worktree.mkdir()
+    (worktree / ".git").write_text("gitdir: /elsewhere\n", encoding="utf-8")
+    nested = _mark_git_repo(worktree / "nested")
+
+    with patch("brainvault.git_scan._run_git", return_value=".git"):
+        found = discover_repos(root, progress=False)
+
+    assert found == sorted((alpha, zeta, nested))
+
+
+def test_discover_repos_respects_max_depth(tmp_path):
+    root = tmp_path.resolve()
+    deep = _mark_git_repo(root / "a" / "b" / "repo")
+    with patch("brainvault.git_scan._run_git", return_value=".git"):
+        assert discover_repos(root, max_depth=2, progress=False) == []
+        assert discover_repos(root, max_depth=3, progress=False) == [deep]
+
+
+def test_discover_repos_skips_failed_rev_parse_and_unreadable_dirs(tmp_path):
+    root = tmp_path.resolve()
+    ok = _mark_git_repo(root / "ok")
+    broken = _mark_git_repo(root / "broken")
+    _mark_git_repo(root / "explodes")
+    blocked = root / "blocked"
+    blocked.mkdir()
+    _mark_git_repo(blocked / "hidden-repo")
+
+    def fake_run_git(args, cwd):
+        cwd = Path(cwd)
+        if cwd.resolve() == broken:
+            return ""
+        if cwd.name == "explodes":
+            raise RuntimeError("git failed")
+        return ".git"
+
+    real_iterdir = Path.iterdir
+
+    def guarded_iterdir(self):
+        if self.resolve() == blocked:
+            raise PermissionError("denied")
+        return real_iterdir(self)
+
+    with (
+        patch("brainvault.git_scan._run_git", side_effect=fake_run_git),
+        patch.object(Path, "iterdir", guarded_iterdir),
+    ):
+        found = discover_repos(root, progress=False)
+
+    assert found == [ok]
 
 
 # ---------------------------------------------------------------------------
