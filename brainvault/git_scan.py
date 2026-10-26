@@ -234,8 +234,12 @@ def _get_commits(repo_path: Path, since: str | datetime, limit: int) -> list[Com
 
 
 def _get_commit_body(repo_path: Path, commit_hash: str) -> str:
-    """Return full commit message body (excluding subject), or empty string."""
-    out = _run_git(["show", "-s", "--format=%B", commit_hash], cwd=repo_path)
+    """Return the commit message body (excluding the subject), or empty string.
+
+    ``%b`` is body-only. ``%B`` is the raw subject plus body, which duplicated
+    the subject already stored from ``%s`` into every git memory.
+    """
+    out = _run_git(["show", "-s", "--format=%b", commit_hash], cwd=repo_path)
     return (out or "").strip()
 
 

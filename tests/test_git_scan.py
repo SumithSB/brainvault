@@ -1,10 +1,11 @@
 """
 tests/test_git_scan.py — Tests for brainvault/git_scan.py
 
-All subprocess calls are mocked — no real git repository required.
+Subprocess calls are mocked, except the commit-body tests, which use a temp git repo.
 conftest.py autouse fixtures (mock_embeddings, tmp_db) handle DB and embedding isolation.
 """
 
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ from brainvault.git_scan import (
     CommitStats,
     _classify_memory_type,
     _format_memory_content,
+    _get_commit_body,
     _get_commit_stats,
     _get_commits,
     _is_significant,
@@ -140,6 +142,61 @@ _FAKE_LOG = (
         ]
     )
 )
+
+
+def _git_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["GIT_AUTHOR_NAME"] = "Alice"
+    env["GIT_AUTHOR_EMAIL"] = "a@example.com"
+    env["GIT_COMMITTER_NAME"] = "Alice"
+    env["GIT_COMMITTER_EMAIL"] = "a@example.com"
+    return env
+
+
+def _git(path: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=_git_env(),
+    )
+    return result.stdout.strip()
+
+
+def _init_git_repo(path: Path) -> None:
+    """Real repo so commit-body formatting is checked against git, not a mock."""
+    _git(path, "init")
+    _git(path, "config", "user.email", "a@example.com")
+    _git(path, "config", "user.name", "Alice")
+    _git(path, "config", "commit.gpgsign", "false")
+
+
+def _commit_file(path: Path, filename: str, *paragraphs: str) -> str:
+    (path / filename).write_text(filename + "\n", encoding="utf-8")
+    _git(path, "add", filename)
+    _git(path, "commit", "--no-gpg-sign", *[arg for p in paragraphs for arg in ("-m", p)])
+    return _git(path, "rev-parse", "HEAD")
+
+
+def test_get_commit_body_excludes_subject(tmp_path):
+    _init_git_repo(tmp_path)
+    sha = _commit_file(
+        tmp_path,
+        "parser.py",
+        "fix parser",
+        "Root cause: off-by-one in the length cap.",
+    )
+    body = _get_commit_body(tmp_path, sha)
+    assert body == "Root cause: off-by-one in the length cap."
+    assert "fix parser" not in body
+
+
+def test_get_commit_body_empty_when_subject_only(tmp_path):
+    _init_git_repo(tmp_path)
+    sha = _commit_file(tmp_path, "readme.txt", "fix parser")
+    assert _get_commit_body(tmp_path, sha) == ""
 
 
 def test_get_commits_parses_fields(tmp_path):
