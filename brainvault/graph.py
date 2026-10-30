@@ -25,12 +25,19 @@ def _parse_git_memory(content: str) -> dict:
     """
     Extract structured fields from a [git] memory string.
 
-    Expected format:
+    Expected format (header, then an optional message body):
         [git] abc12345: subject line
         Date: 2024-01-15
         Author: Name <email>
         Changed: 5 files, +120 -45 lines
         Files: a.py, b.py, c.py
+
+        Message body:
+        ...
+
+    Parsing stops at the first blank line or ``Message body:`` marker.
+    Commit prose often repeats ``Files:`` / ``Date:`` lines, and those must
+    not overwrite the header used for file-overlap and temporal edges.
     """
     result: dict = {
         "is_git": False,
@@ -54,6 +61,8 @@ def _parse_git_memory(content: str) -> dict:
         result["subject"] = m.group(2)
 
     for line in lines[1:]:
+        if not line.strip() or line.startswith("Message body:"):
+            break
         if line.startswith("Date: "):
             result["date"] = line[6:].strip()
         elif line.startswith("Author: "):
