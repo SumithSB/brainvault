@@ -27,6 +27,7 @@ from brainvault.git_scan import (
     _refine_memory_type_from_body,
     _resolve_repo_path,
     _run_git,
+    _subject_tokens,
     discover_repos,
     scan_repo,
 )
@@ -296,6 +297,27 @@ def test_is_significant_keyword(keyword):
     assert _is_significant(c, _make_stats()) is True
 
 
+def test_subject_tokens_peel_conventional_prefix():
+    assert _subject_tokens("fix: null pointer in login")[0] == "fix"
+    assert _subject_tokens("Refactor(auth): split session store")[0] == "refactor"
+    assert _subject_tokens("remove!: drop legacy client")[0] == "remove"
+    assert _subject_tokens("ship add-on package") == ["ship", "add-on", "package"]
+
+
+def test_is_significant_conventional_commit_prefix():
+    # Tiny diff: only the keyword can make this worth saving.
+    stats = _make_stats(files=1, additions=4, deletions=1)
+    assert _is_significant(_make_commit("fix: null pointer in login"), stats) is True
+    assert _is_significant(_make_commit("refactor(auth): split session store"), stats) is True
+    assert _is_significant(_make_commit("remove!: drop legacy client"), stats) is True
+
+
+def test_conventional_chore_and_hyphenated_word_stay_insignificant():
+    stats = _make_stats(files=1, additions=2, deletions=1)
+    assert _is_significant(_make_commit("chore: tweak padding"), stats) is False
+    assert _is_significant(_make_commit("ship add-on package"), stats) is False
+
+
 def test_is_significant_many_files():
     c = _make_commit("update various configs")
     assert _is_significant(c, _make_stats(files=6)) is True
@@ -354,6 +376,13 @@ def test_classify_unknown_defaults_to_note():
 def test_classify_keyword_not_first_word():
     # "implement" found in second word position
     assert _classify_memory_type(_make_commit("initial implement approach")) == "pattern"
+
+
+def test_classify_conventional_prefix_and_scope():
+    assert _classify_memory_type(_make_commit("refactor(auth): split session store")) == "decision"
+    assert _classify_memory_type(_make_commit("fix: null pointer in login")) == "note"
+    assert _classify_memory_type(_make_commit("add(api): rate limit middleware")) == "pattern"
+    assert _classify_memory_type(_make_commit("remove!: drop legacy client")) == "decision"
 
 
 def test_refine_body_root_cause_becomes_pattern():
@@ -442,6 +471,32 @@ def _make_git_side_effect(log_output, numstat_output):
         return ".git"  # rev-parse
 
     return side_effect
+
+
+def test_scan_repo_saves_small_conventional_commit(tmp_path):
+    (tmp_path / ".git").mkdir()
+    log = "\x1f".join(
+        [
+            "def4567800000000000000000000000000000000",
+            "refactor(auth): split session store",
+            "Alice <a@example.com>",
+            "2024-01-15T10:00:00+00:00",
+            "",
+        ]
+    )
+    since = datetime(2023, 1, 1, tzinfo=timezone.utc)
+    with patch(
+        "brainvault.git_scan._run_git",
+        side_effect=_make_git_side_effect(log, "3\t1\tsrc/auth.py\n"),
+    ):
+        stats = scan_repo(tmp_path, project="myproject", since=since, limit=100, verbose=False)
+
+    assert stats["commits_saved"] == 1
+    assert stats["not_significant"] == 0
+    memories = db.get_project_memories("myproject")
+    assert len(memories) == 1
+    assert memories[0]["memory_type"] == "decision"
+    assert "refactor(auth): split session store" in memories[0]["content"]
 
 
 def test_scan_repo_saves_significant_commit(tmp_path):

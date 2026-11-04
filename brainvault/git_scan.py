@@ -296,13 +296,30 @@ def _is_noise(message: str) -> bool:
     return any(pattern in lower for pattern in NOISE_PATTERNS)
 
 
+# Conventional Commit type glued to punctuation: "fix:", "refactor(auth):", "remove!:".
+# A whitespace split leaves the colon attached, so the type never equals "fix".
+_CONVENTIONAL_TYPE = re.compile(r"^([a-z0-9]+)(?:\([^)]*\))?!?:?$")
+
+
+def _subject_tokens(message: str) -> list[str]:
+    """Split a subject into keyword tokens.
+
+    A plain word is kept whole, so ``add-on`` stays one token. A Conventional
+    Commit type, with an optional scope and breaking-change marker, is reduced
+    to the type word so ``refactor(auth):`` matches ``refactor``.
+    """
+    tokens: list[str] = []
+    for raw in message.lower().split():
+        match = _CONVENTIONAL_TYPE.match(raw)
+        tokens.append(match.group(1) if match else raw)
+    return tokens
+
+
 def _is_significant(commit: CommitInfo, stats: CommitStats) -> bool:
     """
     Return True if this commit is worth saving as a memory.
     Exclusions are checked first; a single inclusion is sufficient.
     """
-    message_lower = commit["message"].lower()
-
     # Hard exclusions — noise always wins regardless of other signals
     if _is_noise(commit["message"]):
         return False
@@ -310,7 +327,7 @@ def _is_significant(commit: CommitInfo, stats: CommitStats) -> bool:
     # Inclusions — keyword or merge always wins over trivial-size check
     if commit["is_merge"]:
         return True
-    words = message_lower.split()
+    words = _subject_tokens(commit["message"])
     if any(w in SIGNIFICANT_KEYWORDS for w in words):
         return True
 
@@ -329,7 +346,7 @@ def _is_significant(commit: CommitInfo, stats: CommitStats) -> bool:
 
 def _classify_memory_type(commit: CommitInfo) -> str:
     """Map a commit to a memory_type based on its subject keywords."""
-    words = commit["message"].lower().split()
+    words = _subject_tokens(commit["message"])
     # Check first word first for speed, then scan all words
     if words and words[0] in MEMORY_TYPE_MAP:
         return MEMORY_TYPE_MAP[words[0]]
