@@ -95,19 +95,23 @@ SIGNIFICANT_KEYWORDS = frozenset(
     }
 )
 
-# Patterns in commit subjects that indicate noise to skip
+# Phrases in commit subjects that indicate noise to skip.
+# Short words live in _NOISE_TOKENS so "wipe" and "bumper" are not dropped.
 NOISE_PATTERNS = frozenset(
     {
-        "wip",
         "work in progress",
         "auto-merge",
-        "bump",
         "update dependencies",
         "update deps",
         "dependency update",
         "dependabot",
     }
 )
+
+# Whole tokens only. A substring check treats "wipe"/"swipe" as "wip"
+# and "bumper" as "bump".
+_NOISE_TOKENS = frozenset({"wip", "bump", "bumped", "bumping"})
+_NOISE_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 # Conservative body/signal refinement (full message = subject + body)
 _BODY_PATTERN_SIGNAL = re.compile(
@@ -289,11 +293,16 @@ def _get_commit_stats(repo_path: Path, commit_hash: str) -> CommitStats:
 
 
 def _is_noise(message: str) -> bool:
-    """Return True if the commit message matches any noise pattern."""
+    """Return True if the commit message matches any noise pattern.
+
+    ``wip`` and ``bump`` match as whole tokens, including ``wip:`` and
+    ``bumped`` / ``bumping``. ``wipe``, ``swipe``, and ``bumper`` do not.
+    Longer phrases are still matched anywhere in the subject.
+    """
     lower = message.lower()
-    if lower.startswith("wip") or "work in progress" in lower:
+    if any(pattern in lower for pattern in NOISE_PATTERNS):
         return True
-    return any(pattern in lower for pattern in NOISE_PATTERNS)
+    return any(token in _NOISE_TOKENS for token in _NOISE_TOKEN_RE.findall(lower))
 
 
 # Conventional Commit type glued to punctuation: "fix:", "refactor(auth):", "remove!:".

@@ -333,6 +333,19 @@ def test_is_not_significant_wip():
     assert _is_significant(c, _make_stats(files=10, additions=100)) is False
 
 
+def test_wipe_and_bumper_are_not_noise():
+    """``wip`` and ``bump`` are tokens, so wipe/swipe/bumper stay eligible."""
+    large = _make_stats(files=6, additions=20)
+    tiny = _make_stats(files=1, additions=4, deletions=1)
+    assert _is_significant(_make_commit("wipe stale session tokens"), large) is True
+    assert _is_significant(_make_commit("swipe gesture for navigation"), large) is True
+    # "fix" is significant; a substring check on "bump" used to drop this.
+    assert _is_significant(_make_commit("fix bumper collision"), tiny) is True
+    assert _is_significant(_make_commit("bump lodash to 4.2"), tiny) is False
+    assert _is_significant(_make_commit("WIP fix auth"), large) is False
+    assert _is_significant(_make_commit("bumped pytest from 8 to 9"), tiny) is False
+
+
 def test_is_not_significant_auto_merge():
     c = _make_commit("auto-merge from main", is_merge=True)
     assert _is_significant(c, _make_stats()) is False
