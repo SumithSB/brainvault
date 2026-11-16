@@ -107,6 +107,16 @@ def test_summarize_output_bash_failure():
     assert "command not found" in result
 
 
+def test_summarize_output_bash_failure_redacts_sk_key_past_preview_cap():
+    """stderr must not be sliced before redaction; a short prefix of sk- would be kept."""
+    key = "sk-" + ("b" * 24)
+    stderr = ("e" * 90) + key + " trailing"
+    result = _summarize_output("Bash", {"exit_code": 1, "stderr": stderr})
+    assert key not in result
+    assert "sk-" not in result
+    assert "exit=1" in result
+
+
 def test_summarize_output_non_bash():
     result = _summarize_output("Write", {"output": "ok"})
     assert result == ""

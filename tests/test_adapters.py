@@ -25,7 +25,7 @@ from brainvault.adapters.claude_code import (
     ENGRAM_MARKER,
     SettingsJsonError,
 )
-from brainvault.adapters.cursor import _cursor_managed_body
+from brainvault.adapters.cursor import _cursor_managed_body, _summarize_cursor_posttool_output
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -503,6 +503,51 @@ class TestCursorAdapter:
         assert not adapter.owns_payload(
             {"tool_name": "Write", "tool_input": {}, "transcript_path": "/.claude/projects/x.jsonl"}
         )
+
+    def test_cursor_posttool_output_redacts_sk_key_past_preview_cap(self):
+        """Tool output is capped at 200 chars; slicing first keeps a partial sk- key."""
+        key = "sk-" + ("d" * 24)
+        adapter = CursorAdapter()
+        ev = adapter.event_from_payload(
+            {
+                "hook_event_name": "postToolUse",
+                "conversation_id": "c-redact",
+                "tool_name": "Read",
+                "tool_output": ("z" * 190) + key + " tail",
+            }
+        )
+        assert ev is not None
+        assert key not in ev.output_summary
+        assert "sk-" not in ev.output_summary
+
+    def test_cursor_shell_tail_redacts_sk_key_straddling_window(self):
+        """Redact the full shell output before keeping the last 200 characters."""
+        key = "sk-" + ("Q" * 30)
+        output = ("x" * 20) + key + ("y" * 177)
+        adapter = CursorAdapter()
+        ev = adapter.event_from_payload(
+            {
+                "hook_event_name": "afterShellExecution",
+                "conversation_id": "c-shell",
+                "command": "echo secret",
+                "duration": 10,
+                "output": output,
+            }
+        )
+        assert ev is not None
+        assert key not in ev.output_summary
+        assert "sk-" not in ev.output_summary
+        assert "Q" * 20 not in ev.output_summary
+
+    def test_cursor_shell_summary_redacts_stdout_past_preview_cap(self):
+        key = "sk-" + ("e" * 24)
+        summary = _summarize_cursor_posttool_output(
+            "Shell",
+            json.dumps({"exitCode": 1, "stdout": ("s" * 70) + key + " end"}),
+        )
+        assert key not in summary
+        assert "sk-" not in summary
+        assert summary.startswith("exit=1")
 
     def test_cursor_event_from_payload_posttooluse(self):
         adapter = CursorAdapter()

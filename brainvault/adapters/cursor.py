@@ -130,12 +130,12 @@ def _summarize_cursor_posttool_output(tool_name: str, tool_output: str | None) -
         try:
             parsed = json.loads(tool_output)
         except (json.JSONDecodeError, TypeError):
-            return redact_sensitive(tool_output[:120], max_len=120)
+            return redact_sensitive(tool_output, max_len=120)
         if isinstance(parsed, dict):
             code = parsed.get("exitCode", parsed.get("exit_code", ""))
-            tail = redact_sensitive(str(parsed.get("stdout", "") or "")[:80], max_len=80)
+            tail = redact_sensitive(str(parsed.get("stdout", "") or ""), max_len=80)
             return f"exit={code} {tail}".strip()
-    return redact_sensitive(tool_output[:200], max_len=200)
+    return redact_sensitive(tool_output, max_len=200)
 
 
 class CursorAdapter(AgentAdapter):
@@ -477,7 +477,9 @@ class CursorAdapter(AgentAdapter):
             duration = payload.get("duration")
             output = str(payload.get("output") or "")
             dur_ms = f"{duration}ms" if duration is not None else ""
-            out_tail = redact_sensitive(output[-200:], max_len=200) if output else ""
+            # Redact the full output first. Slicing the tail first keeps the
+            # end of an sk- key that began just before the window.
+            out_tail = redact_sensitive(output, max_len=len(output))[-200:] if output else ""
             summary = dur_ms + (f" {out_tail}" if out_tail else "")
             return SessionEvent(
                 session_id=session_id or "unknown",

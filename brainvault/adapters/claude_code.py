@@ -111,7 +111,7 @@ def _summarize_posttool_input(tool_name: str, tool_input: dict) -> str:
 def _summarize_posttool_output(tool_name: str, tool_response: dict) -> str:
     if tool_name == "Bash":
         exit_code = tool_response.get("exit_code")
-        stderr = _redact_sensitive((tool_response.get("stderr") or "")[:100], max_len=100)
+        stderr = _redact_sensitive(tool_response.get("stderr") or "", max_len=100)
         if exit_code and exit_code != 0:
             return f"exit={exit_code} {stderr}".strip()
         return f"exit={exit_code or 0}"
