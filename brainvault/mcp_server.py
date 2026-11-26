@@ -241,7 +241,7 @@ def save_memory(
     content: str,
     memory_type: str,
     project: str | None = None,
-    keywords: list[str] = None,
+    keywords: list[str] | None = None,
 ) -> str:
     """
     Save a memory to your brainvault.
@@ -251,11 +251,12 @@ def save_memory(
     - User describes themselves, their preferences, or their working style (type: profile)
     - User makes an architectural decision with reasoning (type: decision)
     - User establishes a pattern or convention (type: pattern)
-    - User describes a project (use register_project instead for full project context)
+    - User records stack, constraints, or onboarding facts (type: project)
+    - User describes a project record (use register_project for name, stack, and notes)
 
     Args:
         content: The memory to save — be specific and include the reasoning, not just the conclusion
-        memory_type: One of: profile | decision | pattern | note
+        memory_type: One of: profile | project | decision | pattern | note
         project: Project name to scope this memory to (omit for global memories)
         keywords: Optional list of keywords. Auto-extracted if not provided.
     """
@@ -616,7 +617,7 @@ def update_memory(
     Args:
         memory_id: UUID of the memory to update (from search results or save confirmations)
         content: New content to replace the existing text (omit to keep unchanged)
-        memory_type: New type — one of: profile | decision | pattern | note (omit to keep unchanged)
+        memory_type: New type, one of: profile | project | decision | pattern | note (omit to keep unchanged)
         project: New project scope (omit to keep unchanged)
     """
     db.init_db()

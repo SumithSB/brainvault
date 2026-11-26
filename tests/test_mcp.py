@@ -64,6 +64,37 @@ def test_save_memory_invalid_type():
     assert "Invalid memory_type" in result
 
 
+def test_save_and_update_accept_project_memory_type():
+    """project is a stored memory type, and the MCP tool docs list it."""
+    saved = save_memory(
+        content="Stack: FastAPI and Postgres. Constraint: no Docker.",
+        memory_type="project",
+        project="billing",
+        keywords=["fastapi", "postgres"],
+    )
+    assert "Saved. Memory ID:" in saved
+    assert "(project · project: billing)" in saved
+    memory_id = saved.split("Memory ID: ")[1].split(" ")[0]
+    with db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT memory_type, keywords FROM memories WHERE id = ?", (memory_id,)
+        ).fetchone()
+    assert row["memory_type"] == "project"
+    assert "fastapi" in row["keywords"]
+
+    noted = save_memory("Onboarding: read the deploy notes first.", "note", project="billing")
+    note_id = noted.split("Memory ID: ")[1].split(" ")[0]
+    updated = update_memory(note_id, memory_type="project")
+    assert f"Memory {note_id} updated" in updated
+    assert "type" in updated
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT memory_type FROM memories WHERE id = ?", (note_id,)).fetchone()
+    assert row["memory_type"] == "project"
+
+    for fn in (save_memory, update_memory):
+        assert "profile | project | decision | pattern | note" in (fn.__doc__ or "")
+
+
 def test_search_memory_returns_formatted_results():
     save_memory("JWT auth for stateless APIs", "decision", project="pluto")
     result = search_memory("JWT")
